@@ -277,8 +277,28 @@ evidence plus a decision, per plan §5's "switch only on measurable benefit".
 **These are development-Mac numbers and are NOT device-validated** — that is
 Chunk 7.4's job, and the doc says so prominently.
 
-Next: 7.3 (lifecycle stress + leak tests), 7.4 (on-device golden verification),
-then Phase 8.
+**Chunk 7.3 is complete** — `tests/cpp/lifecycle_tests.cpp` (10 stress tests),
+an opt-in `leaks` variant, and `docs/lifecycle-testing.md`.
+
+- **ASan's LeakSanitizer does NOT work on macOS** (`detect_leaks=1` prints "not
+  supported on this platform" and exits 0). The long-standing `asan` variant
+  therefore proves memory-SAFETY, not leak-freedom — do not cite it as evidence
+  of "leak-clean". `tests/run-tests.sh leaks` is the real gate: a plain
+  (non-ASan, since ASan replaces the allocator) build run under
+  `leaks --atExit`, currently **0 leaks**. On Linux it falls back to real LSan;
+  if `leaks` is missing on Darwin it fails loudly rather than passing silently.
+- **A real bug was found and fixed**: `FrameBuffer::resize()` caught only
+  `std::bad_alloc`, but a request exceeding `std::vector::max_size()` throws
+  `std::length_error` — uncaught, that terminates the process, which is exactly
+  the "handle allocation failures without process termination" criterion (§16/
+  §21) this chunk exists to defend. Now mapped to `AllocationFailed`.
+
+Not covered, and NOT approximated headlessly (see the doc): background/
+foreground, JS reload, React root destruction, real ViewManager-level mount/
+unmount, and genuine OS low-memory notifications. All need a device/emulator.
+
+Next: 7.4 (on-device golden verification — genuinely needs hardware), then
+Phase 8.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty

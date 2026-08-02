@@ -20,6 +20,18 @@
 # docs/render-benchmark.md for methodology and results:
 #   tests/run-tests.sh bench        # ~10-20s, prints raw numbers
 #
+# A sixth, OPT-IN variant, "leaks" (Chunk 7.3), is the actual LEAK-CLEAN gate
+# — see docs/lifecycle-testing.md for why this is separate from `asan`:
+# ASan's LeakSanitizer does NOT work on macOS (detect_leaks=1 prints "not
+# supported on this platform" and exits 0), so the `asan` variant proves
+# memory-safety, NOT leak-freedom. On Darwin this variant builds the PLAIN
+# (unsanitized — `leaks` and ASan's allocator conflict) test binary and runs
+# it under `/usr/bin/leaks --atExit`, which DOES work as an at-exit leak gate
+# on macOS. On a non-Darwin host there is no `leaks` equivalent used here, so
+# it falls back to ASan's LeakSanitizer (detect_leaks=1) — real coverage
+# there, since LSan works on Linux — rather than silently skipping:
+#   tests/run-tests.sh leaks        # ~15-20s on Darwin
+#
 # Uses CMake + CTest when available; otherwise falls back to a direct clang
 # build with equivalent flags (so it runs without CMake installed).
 set -euo pipefail
@@ -69,7 +81,11 @@ INC=(
   -I"$ROOT/tests/cpp"
 )
 
-run_fallback() {
+# Compiles (but does not run) the fallback test binary for variant `v`, and
+# sets the global FALLBACK_BIN to its path. Split out of run_fallback (below)
+# so run_leaks (the `leaks` variant) can build the same PLAIN binary and run
+# it under `leaks --atExit` instead of executing it directly.
+build_fallback() {
   local v="$1" san=() rlsan=() bdir rldir
   case "$v" in
     plain) san=() ; rlsan=() ;;
@@ -114,8 +130,14 @@ run_fallback() {
     objs+=("$o")
   done
   "$CXX" ${san[@]+"${san[@]}"} "$rldir"/rl_*.o "${objs[@]}" -o "$bdir/rnrlottie_tests" -lpthread
+  FALLBACK_BIN="$bdir/rnrlottie_tests"
+}
+
+run_fallback() {
+  local v="$1"
+  build_fallback "$v"
   echo "== [clang:$v] run =="
-  ( cd "$ROOT" && "$bdir/rnrlottie_tests" )
+  ( cd "$ROOT" && "$FALLBACK_BIN" )
 }
 
 # --- fuzz: build + bounded smoke run of the Chunk 5.5 libFuzzer target ------
@@ -248,6 +270,55 @@ run_bench_fallback() {
   ( cd "$ROOT" && "$bdir/rnrlottie_bench_render" )
 }
 
+# --- leaks: the actual leak-clean gate (Chunk 7.3) --------------------------
+#
+# See the header comment above for why this is Darwin-`leaks`-based rather
+# than folded into `asan`. Builds the PLAIN (unsanitized) binary — `leaks`
+# and ASan's allocator implementation conflict, so a build WITH ASan would
+# make `leaks`'s findings meaningless — and runs it under `leaks --atExit`,
+# which prints "N leaks for M total leaked bytes" and exits 1 on a leaking
+# binary, or "0 leaks" and exits 0 on a clean one (verified against both a
+# leaking and a non-leaking probe binary).
+run_leaks_cmake() {
+  local bdir="$ROOT/build/tests-plain"
+  echo "== [leaks] configure/build (cmake, plain/unsanitized) =="
+  cmake -S "$ROOT/tests/cpp" -B "$bdir" -DRNRLOTTIE_SANITIZE=off >/dev/null
+  cmake --build "$bdir" -j --target rnrlottie_tests >/dev/null
+  echo "== [leaks] running under leaks --atExit =="
+  ( cd "$ROOT" && leaks --atExit -- "$bdir/rnrlottie_tests" )
+}
+
+run_leaks_fallback_darwin() {
+  build_fallback plain
+  echo "== [leaks] running under leaks --atExit =="
+  ( cd "$ROOT" && leaks --atExit -- "$FALLBACK_BIN" )
+}
+
+run_leaks() {
+  if [ "$(uname -s)" != "Darwin" ]; then
+    echo "== [leaks] non-Darwin host: no 'leaks' equivalent wired here."
+    echo "   Falling back to ASan's LeakSanitizer (detect_leaks=1), which DOES"
+    echo "   work on Linux (unlike on macOS) — see docs/lifecycle-testing.md."
+    if command -v cmake >/dev/null 2>&1; then
+      ASAN_OPTIONS="detect_leaks=1:${ASAN_OPTIONS:-}" run_cmake asan
+    else
+      ASAN_OPTIONS="detect_leaks=1:${ASAN_OPTIONS:-}" run_fallback asan
+    fi
+    return $?
+  fi
+  if ! command -v leaks >/dev/null 2>&1; then
+    echo "== [leaks] ERROR: this is Darwin but /usr/bin/leaks is not on PATH."
+    echo "   Refusing to silently report success — install Xcode Command"
+    echo "   Line Tools (leaks ships with them) or run a different variant."
+    return 1
+  fi
+  if command -v cmake >/dev/null 2>&1; then
+    run_leaks_cmake
+  else
+    run_leaks_fallback_darwin
+  fi
+}
+
 status=0
 for v in "${VARIANTS[@]}"; do
   echo
@@ -264,6 +335,8 @@ for v in "${VARIANTS[@]}"; do
     else
       run_bench_fallback || status=1
     fi
+  elif [ "$v" = "leaks" ]; then
+    run_leaks || status=1
   elif command -v cmake >/dev/null 2>&1; then
     run_cmake "$v" || status=1
   else

@@ -2,6 +2,7 @@
 #include "FrameBuffer.h"
 
 #include <new>
+#include <stdexcept>
 
 #include "InputLimits.h"
 
@@ -31,6 +32,21 @@ bool FrameBuffer::resize(Dimensions dims, PlayerError& outError) {
         buffers_[0].assign(pixels, 0u);
         buffers_[1].assign(pixels, 0u);
     } catch (const std::bad_alloc&) {
+        // The expected shape of a real OOM: the allocator/OS refuses the
+        // request.
+        outError = PlayerError{PlayerErrorCode::AllocationFailed,
+                               "failed to allocate frame buffers", 0};
+        return false;
+    } catch (const std::length_error&) {
+        // A request that exceeds vector::max_size() (e.g. `pixels` — already
+        // bounded by checkDimensions() against `limits_.maxPixels`, but that
+        // limit can itself be configured absurdly large) throws
+        // std::length_error rather than std::bad_alloc, since the container
+        // rejects it before ever asking the allocator. Same externally
+        // observable outcome (this allocation cannot be satisfied), so it
+        // maps to the same typed error rather than propagating and crashing
+        // the process — see tests/cpp/lifecycle_tests.cpp
+        // (lifecycle_framebuffer_allocation_failure_does_not_terminate).
         outError = PlayerError{PlayerErrorCode::AllocationFailed,
                                "failed to allocate frame buffers", 0};
         return false;
