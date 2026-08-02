@@ -31,6 +31,7 @@
 #include "AnimationSource.h"
 #include "FrameBuffer.h"
 #include "FrameSink.h"
+#include "Metrics.h"
 #include "RlottiePlayerCore.h"
 
 namespace rnrlottie {
@@ -70,6 +71,14 @@ public:
     const FrameBuffer& frameBuffer() const;  // [main] presenter reads front
     std::uint64_t generation() const;
 
+    // Chunk 7.1 — instrumentation. Both callable from [any] thread (frozen
+    // shape, docs/bridge-contract.md "Phase 7 additions"). setMetricsEnabled
+    // is the sole gate: when false, collection on the render worker is
+    // skipped at the first branch (see Metrics.h) so it costs nothing beyond
+    // a predictable relaxed atomic load per call site.
+    void setMetricsEnabled(bool enabled);
+    MetricsSnapshot metricsSnapshot() const;
+
 private:
     void workerLoop();
     void runLoad(AnimationSource source, std::uint64_t sourceEpoch);
@@ -89,6 +98,11 @@ private:
     // Source epoch: bumped ONLY by setSource; gates stale parses/Loaded events so
     // a later resize does not suppress a valid load.
     std::atomic<std::uint64_t> sourceEpoch_{0};
+
+    // Chunk 7.1: internally gated/synchronized (see Metrics.h); no additional
+    // locking needed here despite being written from [worker] and read from
+    // [any] thread via metricsSnapshot().
+    MetricsCollector metrics_;
 
     std::mutex mutex_;
     std::condition_variable cv_;

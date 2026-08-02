@@ -102,3 +102,42 @@ TEST(framebuffer_concurrency_no_tearing) {
     main.join();
     CHECK(torn.load() == 0);
 }
+
+// Chunk 7.1 — §21 acceptance criterion: "no per-frame native memory
+// allocation". allocCount() must stop increasing once dimensions settle, and
+// only increment on genuine reallocations (never the idempotent equal-dims
+// path, never a rejected resize()).
+TEST(framebuffer_alloc_count_steady_state) {
+    FrameBuffer fb(FrameBuffer::Limits{1u << 20});
+    PlayerError err;
+    CHECK(fb.allocCount() == 0);
+    CHECK(fb.peakBytes() == 0);
+
+    CHECK(fb.resize({32, 32}, err));
+    CHECK(fb.allocCount() == 1);
+    const std::uint64_t expectedBytes =
+        static_cast<std::uint64_t>(32 * 32) * 4u * 2u;  // front + back
+    CHECK(fb.peakBytes() == expectedBytes);
+
+    // "Steady state": many repeated resize() calls at the SAME dims (exactly
+    // what a driving Choreographer/CADisplayLink loop would do if it called
+    // resize() every tick as a defensive no-op) must not move the counter.
+    for (int i = 0; i < 500; ++i) {
+        CHECK(fb.resize({32, 32}, err));
+    }
+    CHECK(fb.allocCount() == 1);
+    CHECK(fb.peakBytes() == expectedBytes);
+
+    // A genuine dimension change reallocates exactly once more.
+    CHECK(fb.resize({64, 16}, err));  // same pixel count, different shape
+    CHECK(fb.allocCount() == 2);
+
+    // A rejected resize (invalid dims) must not count as an allocation.
+    CHECK(!fb.resize({0, 10}, err));
+    CHECK(fb.allocCount() == 2);
+
+    // peakBytes is a high-water mark: shrinking back down must not lower it.
+    CHECK(fb.resize({4, 4}, err));
+    CHECK(fb.allocCount() == 3);
+    CHECK(fb.peakBytes() == expectedBytes);  // still the earlier, larger peak
+}

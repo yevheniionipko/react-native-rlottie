@@ -48,6 +48,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) RCTDirectEventBlock onAnimationLoop;
 @property (nonatomic, copy, nullable) RCTDirectEventBlock onAnimationFinish;
 
+// `onMetrics` JS event, Phase 7 (docs/bridge-contract.md "Phase 7
+// additions"). Fired from -onDisplayLinkTick:, throttled to at most once per
+// second and only while `metricsEnabled` is YES — see that property below.
+// Never fires after -teardown / dealloc, same as every other event here.
+@property (nonatomic, copy, nullable) RCTDirectEventBlock onMetrics;
+
 // Multiplier applied on top of `layoutSize × screenScale` when computing the
 // physical pixel render surface (plan §7: pixelW = layoutW × screenScale ×
 // renderScale). Defaults to 1.0. Chunk 2.3 sets this from the `renderScale`
@@ -85,6 +91,13 @@ NS_ASSUME_NONNULL_BEGIN
 // -setPendingSource: below) so the two props combine correctly regardless of
 // which one JS sets first within a prop transaction.
 @property (nonatomic, copy) NSString *cacheStrategy;
+
+// `metricsEnabled` JS prop (Phase 7), default NO. Gates BOTH
+// RenderCoordinator's own collection (forwarded to `player`) and, at this
+// view layer, the throttled `onMetrics` event and the ui-stall bookkeeping
+// below — disabled means no per-tick work beyond a single boolean check, per
+// the contract's "must cost nothing per frame beyond a predictable branch".
+@property (nonatomic, assign) BOOL metricsEnabled;
 
 // Playback-shaping props the contract requires to be coalesced into ONE
 // native `configure(...)` call per prop transaction (`loop`, `repeatCount`,

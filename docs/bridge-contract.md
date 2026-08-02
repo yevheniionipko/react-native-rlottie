@@ -84,9 +84,12 @@ integer.
 | `onAnimationPause`  | `{}`                                                                                                                                          |
 | `onAnimationLoop`   | `{}`                                                                                                                                          |
 | `onAnimationFinish` | `{}`                                                                                                                                          |
+| `onMetrics`         | Phase 7; see "Phase 7 additions". Opt-in via `metricsEnabled`, throttled to ≤1/sec.                                                           |
 
 There is **no `onFrame` event**, by design (plan §11) — per-frame bridge traffic
-is the exact problem this library exists to avoid. Do not add one.
+is the exact problem this library exists to avoid. Do not add one. `onMetrics`
+is the sole recurring event and is throttled and opt-in precisely so it does not
+become one.
 
 `code` is passed through **verbatim** from the native layer, which gets it from
 `cpp/ErrorCode.h` — the one function both adapters map through. Do not re-map,
@@ -119,6 +122,7 @@ No event may fire after the view is unmounted / dropped.
 | `pauseWhenInactive`  | bool   | default `true`                                                                                                                                                                                               |
 | `cacheStrategy`      | string | `none` \| `model`; default `model`. **iOS only so far** — plumbed into `useModelCache`; Android's source natives take no cache flag yet (Chunk 3.4).                                                         |
 | `colorOverrides`     | array  | `[{keyPath: string, color: string}]`, `color` as `#RRGGBB`/`#AARRGGBB`. Alpha is parsed but **discarded on both platforms** — `RenderCoordinator::setColor` has no alpha parameter.                          |
+| `metricsEnabled`     | bool   | default `false`. Opt-in instrumentation; gates collection and the throttled `onMetrics` event. See "Phase 7 additions".                                                                                      |
 | `allowRemoteSources` | bool   | default `false`. **JS-only gate (Chunk 5.4); never crosses the bridge.** `RlottieView` consumes it in `normalizeSource` and does not forward it in `RlottieNativeProps` — see "Remote loading policy" below. |
 
 Playback-shaping props (`loop`, `repeatCount`, `speed`, `startFrame`, `endFrame`,
@@ -194,6 +198,76 @@ void setStrokeWidth(std::string keyPath, float width);
 // PlaybackController — [UI] only. False when the marker is unknown.
 bool playMarker(const std::string& name);
 ```
+
+## Phase 7 additions — instrumentation (Chunk 7.1)
+
+Frozen before implementation. Two streams implement against this concurrently.
+
+### `metricsEnabled` prop + `onMetrics` event
+
+| prop             | type | notes                                            |
+| ---------------- | ---- | ------------------------------------------------ |
+| `metricsEnabled` | bool | default `false`. Gates collection AND the event. |
+
+| event       | payload             |
+| ----------- | ------------------- |
+| `onMetrics` | see the table below |
+
+**Emission is throttled to at most once per second**, and only while
+`metricsEnabled` is true. This is the one place the library sends a recurring
+event, and the throttle is what keeps it from becoming the per-frame bridge
+traffic the whole design exists to avoid (plan §11/§21). It is **not** an
+`onFrame` in disguise: never emit per frame, never emit when disabled.
+
+When `metricsEnabled` is false the collection itself must be off — a disabled
+metric must cost nothing per frame beyond a predictable branch. Instrumentation
+that slows the thing it measures is worse than none.
+
+| field              | type   | meaning                                                         |
+| ------------------ | ------ | --------------------------------------------------------------- |
+| `parseMs`          | double | Wall time of the last successful parse (load).                  |
+| `firstFrameMs`     | double | Source set → first frame published.                             |
+| `renderP50Ms`      | double | Render-duration percentiles over a bounded rolling window.      |
+| `renderP95Ms`      | double |                                                                 |
+| `renderP99Ms`      | double |                                                                 |
+| `framesRendered`   | int    | Frames actually rendered and published.                         |
+| `framesDropped`    | int    | Render requests coalesced away by latest-frame-wins.            |
+| `bufferAllocCount` | int    | FrameBuffer (re)allocations. Steady state MUST stop increasing. |
+| `peakBufferBytes`  | int    | High-water mark of buffer bytes held by this view.              |
+| `uiStallCount`     | int    | Display ticks that arrived later than expected.                 |
+| `uiStallMaxMs`     | double | Worst observed tick gap.                                        |
+
+`peakBufferBytes` is **this view's frame buffers**, not process RSS — the plan's
+"peak native memory" is not knowable portably from inside the library, and
+reporting a number that looks like process memory but isn't would be worse than
+reporting a narrower number honestly. Say so in the docs.
+
+`framesDropped` counts coalescing, which is correct behaviour (latest-frame-wins,
+plan §5), NOT an error. A rising count under load means the policy is working.
+
+`uiStallCount`/`uiStallMaxMs` are measured on the platform display clock
+(`CADisplayLink` / `Choreographer`), since only the UI thread can observe its own
+stalls. Everything else is measured in the C++ core.
+
+### Core API
+
+```cpp
+// cpp/Metrics.h
+struct MetricsSnapshot {
+    double parseMs, firstFrameMs;
+    double renderP50Ms, renderP95Ms, renderP99Ms;
+    std::uint64_t framesRendered, framesDropped, bufferAllocCount;
+    std::uint64_t peakBufferBytes;
+};
+
+// RenderCoordinator — thread-safe, callable from [any] thread.
+void setMetricsEnabled(bool enabled);
+MetricsSnapshot metricsSnapshot() const;
+```
+
+Collection happens on the render worker; the snapshot is read from the UI
+thread, so the two must not race. Percentiles come from a **bounded** structure
+— a growing sample vector would itself be a memory leak in a long-running app.
 
 ## Source resolution boundary
 

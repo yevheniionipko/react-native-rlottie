@@ -1,6 +1,7 @@
 // Chunk 1.5 — RenderCoordinator implementation.
 #include "RenderCoordinator.h"
 
+#include <chrono>
 #include <utility>
 
 namespace rnrlottie {
@@ -15,6 +16,11 @@ RenderCoordinator::RenderCoordinator(FrameSink& sink, FrameBuffer::Limits limits
 RenderCoordinator::~RenderCoordinator() { release(); }
 
 std::uint64_t RenderCoordinator::setSource(AnimationSource source) {
+    // Chunk 7.1: arms "source set -> first frame published" timing. Called on
+    // the CALLER thread (setSource is [any]-thread callable), which is why
+    // markSourceSet() uses release/acquire rather than relying on this
+    // function's mutex — see Metrics.h.
+    metrics_.markSourceSet();
     std::uint64_t g;
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -48,6 +54,13 @@ void RenderCoordinator::requestFrame(std::size_t frame, std::uint64_t generation
     {
         std::lock_guard<std::mutex> lk(mutex_);
         if (stop_) return;
+        // Chunk 7.1: a still-pending (not yet picked up by the worker) frame
+        // request being overwritten here IS the "coalesced away by
+        // latest-frame-wins" case the bridge contract defines framesDropped
+        // as — correct scheduling behaviour, not an error.
+        if (pendingFrame_.has_value()) {
+            metrics_.recordFrameDropped();
+        }
         pendingFrame_ = frame;  // latest-wins; no queue growth
         pendingGeneration_ = generation;
     }
@@ -122,6 +135,17 @@ std::uint64_t RenderCoordinator::generation() const {
     return generation_.load(std::memory_order_acquire);
 }
 
+void RenderCoordinator::setMetricsEnabled(bool enabled) { metrics_.setEnabled(enabled); }
+
+MetricsSnapshot RenderCoordinator::metricsSnapshot() const {
+    MetricsSnapshot s = metrics_.snapshot();
+    // bufferAllocCount/peakBufferBytes live on FrameBuffer (Chunk 7.1): it is
+    // the single source of truth for whether a resize() actually reallocated.
+    s.bufferAllocCount = frameBuffer_.allocCount();
+    s.peakBufferBytes = frameBuffer_.peakBytes();
+    return s;
+}
+
 void RenderCoordinator::workerLoop() {
     for (;;) {
         std::function<void()> task;
@@ -161,6 +185,10 @@ void RenderCoordinator::runLoad(AnimationSource source, std::uint64_t sourceEpoc
     if (sourceEpoch != sourceEpoch_.load(std::memory_order_acquire)) {
         return;  // a newer setSource superseded this one; skip the parse entirely
     }
+    // Chunk 7.1: only read the clock if metrics are enabled, so a disabled
+    // collector never pays for a steady_clock::now() it would throw away.
+    const bool timed = metrics_.enabled();
+    const auto parseStart = timed ? MetricsClock::now() : MetricsClock::time_point{};
     RlottiePlayerCore::LoadResult result =
         source.kind == AnimationSource::Kind::File
             ? core_->loadFromFile(source.path, source.useModelCache)
@@ -173,6 +201,12 @@ void RenderCoordinator::runLoad(AnimationSource source, std::uint64_t sourceEpoc
     if (result.success) {
         ev.type = PlayerEvent::Type::Loaded;
         ev.metadata = result.metadata;
+        if (timed) {
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  MetricsClock::now() - parseStart)
+                                  .count();
+            metrics_.recordParseMs(ms);
+        }
     } else {
         ev.type = PlayerEvent::Type::Error;
         ev.error = result.error;
@@ -207,6 +241,10 @@ void RenderCoordinator::runRender(std::size_t frame, std::uint64_t generation) {
         return;  // not sized yet
     }
     const FrameBuffer::Dimensions dims = frameBuffer_.dimensions();
+    // Chunk 7.1: only read the clock if metrics are enabled (hot path — this
+    // runs once per rendered frame).
+    const bool timed = metrics_.enabled();
+    const auto renderStart = timed ? MetricsClock::now() : MetricsClock::time_point{};
     const bool ok = core_->renderFrame(frame, target, dims.width, dims.height,
                                        frameBuffer_.bytesPerLine(), /*preserveAspectRatio=*/true);
     if (!ok) {
@@ -222,6 +260,12 @@ void RenderCoordinator::runRender(std::size_t frame, std::uint64_t generation) {
         return;
     }
     frameBuffer_.publish();
+    if (timed) {
+        const double ms = std::chrono::duration<double, std::milli>(MetricsClock::now() -
+                                                                     renderStart)
+                              .count();
+        metrics_.recordFramePublished(ms);
+    }
     sink_.onFramePublished(generation);
 }
 

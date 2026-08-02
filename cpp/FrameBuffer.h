@@ -74,12 +74,38 @@ public:
 
     bool isSized() const;
 
+    // [any thread] Chunk 7.1 instrumentation. Tracked unconditionally (not
+    // gated by RenderCoordinator's metricsEnabled flag): resize() is a
+    // structural, dimension-change event — not a per-frame hot path — so
+    // there is no "cost nothing when disabled" requirement to satisfy here,
+    // and having these always-on means bufferAllocCount is a reliable §21
+    // acceptance signal ("no per-frame native memory allocation") independent
+    // of whether the opt-in metrics feature is on. Written only from
+    // [worker] inside resize(); safe to read from [any] thread (relaxed
+    // atomics — these are independent point-in-time counters, not part of a
+    // larger transaction).
+    //
+    // allocCount(): incremented once per resize() call that actually
+    // (re)allocates, i.e. NOT the idempotent equal-dims early-return and NOT
+    // a rejected (invalid-dims / OOM) call. In steady state (fixed layout
+    // dimensions) this stops increasing, which is exactly the invariant
+    // tests/cpp asserts.
+    std::uint64_t allocCount() const { return allocCount_.load(std::memory_order_relaxed); }
+
+    // peakBytes(): high-water mark of this FrameBuffer's total allocation
+    // (front + back buffer combined, width*height*4 bytes each). This is the
+    // view's OWN buffer memory, not process RSS — see docs/bridge-contract.md
+    // for why that distinction is deliberate.
+    std::uint64_t peakBytes() const { return peakBytes_.load(std::memory_order_relaxed); }
+
 private:
     std::array<std::vector<std::uint32_t>, 2> buffers_;
     std::atomic<int> frontIndex_{-1};  // -1 = nothing published; else 0/1
     int backIndex_ = 0;                // [worker]-only
     Dimensions dims_;                  // [worker]-authoritative
     Limits limits_;
+    std::atomic<std::uint64_t> allocCount_{0};
+    std::atomic<std::uint64_t> peakBytes_{0};
 };
 
 }  // namespace rnrlottie

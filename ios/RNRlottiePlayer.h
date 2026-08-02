@@ -12,6 +12,7 @@
 #import <Foundation/Foundation.h>
 
 #import "FrameBuffer.h"
+#import "Metrics.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -94,6 +95,18 @@ typedef void (^RNRlottieFrameBlock)(void);
 
 // Physical pixel dimensions of the render surface.
 - (void)setSurfaceWidth:(size_t)width height:(size_t)height;
+
+// Phase 7 — instrumentation (docs/bridge-contract.md "Phase 7 additions").
+// Gates BOTH the RenderCoordinator's own collection and (at the view layer)
+// the throttled onMetrics event; default NO. Thread-safe on the coordinator,
+// same as -setColorForKeyPath:.../-setSurfaceWidth:height:.
+- (void)setMetricsEnabled:(BOOL)enabled;
+
+// A thread-safe snapshot of the render-worker-side counters
+// (rnrlottie::RenderCoordinator::metricsSnapshot). Returns a zeroed snapshot
+// if the coordinator is gone (post-teardown) rather than crashing — matches
+// -frontBuffer's "empty result after teardown" contract.
+- (rnrlottie::MetricsSnapshot)metricsSnapshot;
 
 // Called each display tick with a monotonic timestamp in SECONDS. Advances the
 // playback state machine, fires lifecycle blocks, and requests a render.

@@ -97,6 +97,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         view.onAnimationPause = null
         view.onAnimationLoop = null
         view.onAnimationFinish = null
+        view.onMetrics = null
 
         val state = viewStates.remove(view)
         val reactContext = view.context as? ThemedReactContext
@@ -118,6 +119,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         view.onAnimationPause = { emit(view, RlottieEvents.ON_ANIMATION_PAUSE, RlottieEvents.emptyPayload()) }
         view.onAnimationLoop = { emit(view, RlottieEvents.ON_ANIMATION_LOOP, RlottieEvents.emptyPayload()) }
         view.onAnimationFinish = { emit(view, RlottieEvents.ON_ANIMATION_FINISH, RlottieEvents.emptyPayload()) }
+        view.onMetrics = { info -> emit(view, RlottieEvents.ON_METRICS, RlottieEvents.metricsPayload(info)) }
     }
 
     private fun emit(view: RlottieView, name: String, payload: com.facebook.react.bridge.WritableMap) {
@@ -273,6 +275,15 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     @ReactProp(name = "pauseWhenInactive", defaultBoolean = true)
     fun setPauseWhenInactive(view: RlottieView, value: Boolean) {
         stateFor(view).pauseWhenInactive = value
+    }
+
+    // Phase 7 addition (docs/bridge-contract.md "Phase 7 additions"). Applied
+    // immediately, same as `pauseWhenInactive` above — gating collection
+    // on/off has no ordering dependency on anything else in a prop
+    // transaction.
+    @ReactProp(name = "metricsEnabled", defaultBoolean = false)
+    fun setMetricsEnabled(view: RlottieView, value: Boolean) {
+        view.metricsEnabled = value
     }
 
     @ReactProp(name = "cacheStrategy")

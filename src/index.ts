@@ -35,6 +35,7 @@ export type {
   RlottieLoadedEvent,
   RlottieErrorEvent,
   RlottieLifecycleEvent,
+  RlottieMetricsEvent,
   // Props
   RlottieViewProps,
   RlottieResizeMode,

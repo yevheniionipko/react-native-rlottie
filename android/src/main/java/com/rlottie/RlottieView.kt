@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.View
+import android.view.WindowManager
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -260,6 +261,55 @@ class RlottieView @JvmOverloads constructor(
         return h != 0L && RlottieBridge.nativePlayMarker(h, name)
     }
 
+    // --- Phase 7: instrumentation (docs/bridge-contract.md "Phase 7
+    // additions") -----------------------------------------------------------
+    //
+    // `uiStallCount`/`uiStallMaxMs` can only be measured here, on the UI
+    // thread that owns the Choreographer clock (only the UI thread can
+    // observe its own stalls) — everything else in the onMetrics payload
+    // comes from RlottieBridge.nativeGetMetricsSnapshot, i.e. the C++ core.
+
+    /**
+     * Default `false`. Gates BOTH RenderCoordinator's own collection
+     * (forwarded natively) and, at this view layer, the ui-stall bookkeeping
+     * and throttled [onMetrics] emission below — disabled costs nothing per
+     * tick beyond the boolean checks in [onFrameTick].
+     */
+    var metricsEnabled: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) {
+                // Fresh window: history from before a prior disable would be
+                // stale and misleading if attributed to this new period —
+                // mirrors iOS's RNRlottieView -setMetricsEnabled:.
+                uiStallCount = 0
+                uiStallMaxMs = 0.0
+                lastMetricsEmitNanos = 0L
+            }
+            val h = handle
+            if (h != 0L) RlottieBridge.nativeSetMetricsEnabled(h, value)
+        }
+
+    /** Fired at most once per second, only while [metricsEnabled] is true. */
+    var onMetrics: ((RlottieMetricsInfo) -> Unit)? = null
+
+    // Previous tick's frameTimeNanos, or 0 meaning "no valid previous tick to
+    // compare" — reset to 0 whenever the Choreographer callback (re)starts
+    // ([resumeChoreographer]), so the tick right after a resume-from-pause
+    // gap is never scored as a stall (that gap is expected, not jank).
+    private var lastTickTimeNanos: Long = 0L
+
+    // Cumulative since [metricsEnabled] was last turned on — consistent with
+    // the core's own framesRendered/framesDropped/bufferAllocCount counters,
+    // which are likewise cumulative rather than windowed.
+    private var uiStallCount: Int = 0
+    private var uiStallMaxMs: Double = 0.0
+
+    // 0 means "never emitted (since enabling)" — the throttle gate in
+    // [maybeEmitMetrics].
+    private var lastMetricsEmitNanos: Long = 0L
+
     /**
      * Stops the Choreographer callback, destroys the native handle (idempotent
      * there too), zeroes it, and frees the Bitmaps. Safe to call twice — the
@@ -270,6 +320,7 @@ class RlottieView @JvmOverloads constructor(
     fun release() {
         pauseChoreographer()
         removeCallbacks(resizeRunnable)
+        onMetrics = null
         val h = handle
         if (h == 0L) return
         handle = 0L
@@ -336,6 +387,10 @@ class RlottieView @JvmOverloads constructor(
     private fun resumeChoreographer() {
         if (choreographerRunning || handle == 0L || !isAttachedToWindow) return
         choreographerRunning = true
+        // Phase 7: the gap between this (re)start's first tick and whatever
+        // came before it is a pause/backgrounding interval, not jank — see
+        // [lastTickTimeNanos]'s doc comment.
+        lastTickTimeNanos = 0L
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
@@ -354,12 +409,89 @@ class RlottieView @JvmOverloads constructor(
         val h = handle
         if (h == 0L) return
 
+        // Phase 7: stall detection runs BEFORE nativeAdvance so it reflects
+        // the raw tick cadence, not anything that call itself might take.
+        // Driven off this SAME display-clock tick already used for playback
+        // — no separate timer thread, per docs/bridge-contract.md.
+        if (metricsEnabled) {
+            recordStallIfNeeded(frameTimeNanos)
+        }
+        lastTickTimeNanos = frameTimeNanos
+
         val monotonicSeconds = frameTimeNanos / 1_000_000_000.0
         val eventOrdinal = RlottieBridge.nativeAdvance(h, monotonicSeconds)
         dispatchPlaybackEvent(eventOrdinal)
 
         drainEvents(h)
         presentIfNewFrame(h)
+
+        // Runs AFTER presentIfNewFrame so a frame published on this very tick
+        // is reflected in framesRendered.
+        if (metricsEnabled) {
+            maybeEmitMetrics(h, frameTimeNanos)
+        }
+    }
+
+    // Phase 7: `uiStallCount`/`uiStallMaxMs` (docs/bridge-contract.md). A
+    // "stall" is a tick whose gap from the previous tick exceeds 1.5x the
+    // display's expected inter-frame interval — routine scheduling jitter is
+    // well under that, so this does not fire on ordinary frame-to-frame
+    // variance.
+    private fun recordStallIfNeeded(frameTimeNanos: Long) {
+        val last = lastTickTimeNanos
+        if (last == 0L) return // First tick since (re)start — see resumeChoreographer().
+        val gapNanos = frameTimeNanos - last
+        val expectedNanos = expectedFrameIntervalNanos()
+        if (gapNanos > (expectedNanos.toDouble() * STALL_THRESHOLD_MULTIPLIER)) {
+            uiStallCount += 1
+            val gapMs = gapNanos / 1_000_000.0
+            if (gapMs > uiStallMaxMs) uiStallMaxMs = gapMs
+        }
+    }
+
+    /** The display's nominal refresh interval; falls back to 60Hz if unavailable. */
+    @Suppress("DEPRECATION")
+    private fun expectedFrameIntervalNanos(): Long {
+        val refreshRate = try {
+            display?.refreshRate
+                ?: (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+                    ?.defaultDisplay?.refreshRate
+        } catch (_: Exception) {
+            null
+        } ?: DEFAULT_REFRESH_RATE_HZ
+        val safeRate = if (refreshRate > 0f) refreshRate else DEFAULT_REFRESH_RATE_HZ
+        return (1_000_000_000.0 / safeRate).toLong()
+    }
+
+    // Phase 7: throttled to <=1/sec. No-ops silently if [onMetrics] isn't
+    // wired (JS never set it), or before the first second has elapsed since
+    // [metricsEnabled] was last switched on (its setter zeroes
+    // [lastMetricsEmitNanos] on that transition).
+    private fun maybeEmitMetrics(h: Long, frameTimeNanos: Long) {
+        val listener = onMetrics ?: return
+        if (lastMetricsEmitNanos != 0L &&
+            (frameTimeNanos - lastMetricsEmitNanos) < METRICS_INTERVAL_NANOS
+        ) {
+            return
+        }
+        lastMetricsEmitNanos = frameTimeNanos
+        val snapshot = RlottieBridge.nativeGetMetricsSnapshot(h)
+        if (snapshot.size < 9) return // Invalid/stale handle raced us — skip this tick.
+        listener(
+            RlottieMetricsInfo(
+                parseMs = snapshot[0],
+                firstFrameMs = snapshot[1],
+                renderP50Ms = snapshot[2],
+                renderP95Ms = snapshot[3],
+                renderP99Ms = snapshot[4],
+                framesRendered = snapshot[5].toLong().coerceAtMostInt(),
+                framesDropped = snapshot[6].toLong().coerceAtMostInt(),
+                bufferAllocCount = snapshot[7].toLong().coerceAtMostInt(),
+                peakBufferBytes = snapshot[8].toLong().coerceAtMostInt(),
+                uiStallCount = uiStallCount,
+                uiStallMaxMs = uiStallMaxMs,
+            ),
+        )
     }
 
     private fun dispatchPlaybackEvent(ordinal: Int) {
@@ -544,8 +676,21 @@ class RlottieView @JvmOverloads constructor(
         private const val MIN_RENDER_SCALE = 0.05f
         private const val MAX_RENDER_SCALE = 4f
         private const val LOADED_PREFIX_LEN = 7 // "loaded:".length
+
+        // Phase 7: instrumentation.
+        private const val DEFAULT_REFRESH_RATE_HZ = 60f
+        private const val STALL_THRESHOLD_MULTIPLIER = 1.5
+        private const val METRICS_INTERVAL_NANOS: Long = 1_000_000_000L
     }
 }
+
+/**
+ * Clamps to [Int.MAX_VALUE] rather than truncating/wrapping — used for the
+ * `MetricsSnapshot` counters, which are `uint64_t` natively but exposed to JS
+ * as plain numbers (contract table: "int"); values this large are not
+ * expected in practice, but a saturating clamp is safer than silent overflow.
+ */
+private fun Long.coerceAtMostInt(): Int = coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
 /** A named frame segment from the Lottie source (marker names are pre-sanitized natively). */
 data class RlottieMarker(val name: String, val startFrame: Int, val endFrame: Int)
@@ -562,3 +707,25 @@ data class RlottieLoadedInfo(
 
 /** `code` is one of the canonical strings in cpp/ErrorCode.h (identical on iOS/Android). */
 data class RlottiePlayerError(val code: String, val message: String)
+
+/**
+ * Phase 7 addition. Mirrors `docs/bridge-contract.md`'s "Phase 7 additions"
+ * field table byte-for-byte (same field names/types on iOS). The first nine
+ * fields come from `rlottie::MetricsSnapshot` (cpp/Metrics.h) via
+ * [RlottieBridge.nativeGetMetricsSnapshot]; the last two ([uiStallCount],
+ * [uiStallMaxMs]) are measured here on the UI thread, since only the UI
+ * thread can observe its own Choreographer stalls.
+ */
+data class RlottieMetricsInfo(
+    val parseMs: Double,
+    val firstFrameMs: Double,
+    val renderP50Ms: Double,
+    val renderP95Ms: Double,
+    val renderP99Ms: Double,
+    val framesRendered: Int,
+    val framesDropped: Int,
+    val bufferAllocCount: Int,
+    val peakBufferBytes: Int,
+    val uiStallCount: Int,
+    val uiStallMaxMs: Double,
+)

@@ -112,6 +112,46 @@ export interface RlottieErrorEvent {
 /** The four lifecycle events carry no payload (`{}` on the native side). */
 export type RlottieLifecycleEvent = Record<string, never>;
 
+/**
+ * Phase 7 addition. Payload of the throttled `onMetrics` event — see
+ * `docs/bridge-contract.md`'s "Phase 7 additions" field table, which this
+ * mirrors byte-for-byte (same field names, same platform on both sides).
+ *
+ * Emitted at most once per second, and only while `metricsEnabled` is `true`.
+ * This is the ONE recurring event in the library; it is not a per-frame event
+ * in disguise (plan §11/§21) — there is still no `onFrame`.
+ */
+export interface RlottieMetricsEvent {
+  /** Wall time (ms) of the last successful parse (load). */
+  parseMs: number;
+  /** Wall time (ms) from source set to first frame published. */
+  firstFrameMs: number;
+  /** Render-duration percentiles (ms) over a bounded rolling window. */
+  renderP50Ms: number;
+  renderP95Ms: number;
+  renderP99Ms: number;
+  /** Frames actually rendered and published. */
+  framesRendered: number;
+  /** Render requests coalesced away by latest-frame-wins (not an error). */
+  framesDropped: number;
+  /** FrameBuffer (re)allocations; should stop increasing at steady state. */
+  bufferAllocCount: number;
+  /**
+   * High-water mark of frame-buffer bytes held by THIS view — not process
+   * RSS. Not a proxy for total native memory use.
+   */
+  peakBufferBytes: number;
+  /**
+   * Display ticks that arrived later than expected, measured on the platform
+   * display clock (`CADisplayLink` / `Choreographer`). A tick gap caused by
+   * the view being paused/backgrounded and later resumed is deliberately NOT
+   * counted here.
+   */
+  uiStallCount: number;
+  /** Worst observed display-tick gap, in ms. */
+  uiStallMaxMs: number;
+}
+
 // --- Props ------------------------------------------------------------------
 
 export type RlottieResizeMode = 'contain' | 'cover' | 'stretch' | 'center';
@@ -202,6 +242,13 @@ export interface RlottieViewProps extends ViewProps {
   /** Phase 6 addition. Applies on the same serialized render worker as rendering. */
   strokeWidthOverrides?: RlottieStrokeWidthOverride[];
 
+  /**
+   * Default `false`. Phase 7 addition. Opt-in gate for BOTH native
+   * instrumentation collection and the throttled `onMetrics` event below —
+   * when `false`, collection itself is off natively, not merely unreported.
+   */
+  metricsEnabled?: boolean;
+
   onAnimationLoaded?: (event: NativeSyntheticEvent<RlottieLoadedEvent>) => void;
   onAnimationError?: (event: NativeSyntheticEvent<RlottieErrorEvent>) => void;
   onAnimationStart?: (
@@ -216,6 +263,12 @@ export interface RlottieViewProps extends ViewProps {
   onAnimationFinish?: (
     event: NativeSyntheticEvent<RlottieLifecycleEvent>,
   ) => void;
+  /**
+   * Phase 7 addition. Fires at most once per second, only while
+   * `metricsEnabled` is `true`. Never fires after unmount, same as every
+   * other event.
+   */
+  onMetrics?: (event: NativeSyntheticEvent<RlottieMetricsEvent>) => void;
 }
 
 // There is deliberately no `onFrame` prop. A per-frame bridge event is the exact

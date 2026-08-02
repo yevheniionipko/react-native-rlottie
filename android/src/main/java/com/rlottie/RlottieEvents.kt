@@ -23,6 +23,7 @@ object RlottieEvents {
     const val ON_ANIMATION_PAUSE = "onAnimationPause"
     const val ON_ANIMATION_LOOP = "onAnimationLoop"
     const val ON_ANIMATION_FINISH = "onAnimationFinish"
+    const val ON_METRICS = "onMetrics"
 
     /** All events in this component are direct (non-bubbling); see plan §11 / the contract doc. */
     fun exportedCustomDirectEventTypeConstants(): Map<String, Any> {
@@ -68,6 +69,26 @@ object RlottieEvents {
     fun emptyPayload(): WritableMap = Arguments.createMap()
 
     /**
+     * Phase 7 addition. Byte-for-byte with `docs/bridge-contract.md`'s "Phase
+     * 7 additions" field table (same keys/types as iOS's `onMetrics` block).
+     */
+    fun metricsPayload(info: RlottieMetricsInfo): WritableMap {
+        val map = Arguments.createMap()
+        map.putDouble("parseMs", info.parseMs)
+        map.putDouble("firstFrameMs", info.firstFrameMs)
+        map.putDouble("renderP50Ms", info.renderP50Ms)
+        map.putDouble("renderP95Ms", info.renderP95Ms)
+        map.putDouble("renderP99Ms", info.renderP99Ms)
+        map.putInt("framesRendered", info.framesRendered)
+        map.putInt("framesDropped", info.framesDropped)
+        map.putInt("bufferAllocCount", info.bufferAllocCount)
+        map.putInt("peakBufferBytes", info.peakBufferBytes)
+        map.putInt("uiStallCount", info.uiStallCount)
+        map.putDouble("uiStallMaxMs", info.uiStallMaxMs)
+        return map
+    }
+
+    /**
      * Emits a direct event for [viewId] through the classic `RCTEventEmitter` JS module,
      * which is the idiomatic legacy-bridge path for `SimpleViewManager` direct events and
      * stays valid across the RN version range this library targets (CLAUDE.md: RN <= 0.81,
@@ -86,5 +107,6 @@ object RlottieEvents {
         ON_ANIMATION_PAUSE,
         ON_ANIMATION_LOOP,
         ON_ANIMATION_FINISH,
+        ON_METRICS,
     )
 }

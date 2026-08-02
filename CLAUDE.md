@@ -223,7 +223,38 @@ Known limitations (documented at the call sites, not defects):
   afterwards may not take effect. Pre-existing engine behaviour that equally
   affects the shipped `setColor`; noted in `tests/cpp/core_tests.cpp`.
 
-Next: **Phase 7** (performance & stability).
+**Chunk 7.1 is complete** (instrumentation & metrics). `cpp/Metrics.h` +
+collection in `RenderCoordinator`/`FrameBuffer`, the `metricsEnabled` prop, and
+the `onMetrics` event on both platforms.
+
+- **`onMetrics` is the ONLY recurring event, opt-in and throttled to ≤1/sec**,
+  emitted from the existing display-clock tick (no timer thread). It is not an
+  `onFrame` in disguise — never emit per frame, never when disabled. Guarding
+  this is the reason the throttle lives in the contract, not in the code alone.
+- **Disabled costs nothing**: one relaxed atomic load per recording call, and
+  callers gate their own `steady_clock::now()` on `enabled()` first, so a
+  disabled collector never pays for a discarded clock read.
+- Percentiles come from a **fixed 4 KiB ring** (`std::array<double, 512>`), so
+  they reflect the last ~512 renders rather than lifetime history. An unbounded
+  sample vector would be a leak in a long-running app.
+- `bufferAllocCount` not increasing in steady state is a §21 acceptance
+  criterion ("no per-frame native memory allocation") and is asserted by a test.
+- `framesDropped` counts latest-frame-wins coalescing — correct behaviour under
+  load, not an error. Do not "fix" a rising count.
+- `peakBufferBytes` is **this view's buffers, not process RSS** — process memory
+  is not portably knowable from inside the library.
+
+Known cross-platform divergence in the `onMetrics` payload: Android writes the
+four integer fields with `WritableMap.putInt` (32-bit, **saturating**), while
+iOS boxes the native `uint64_t` exactly. Unreachable at default limits
+(`peakBufferBytes` maxes at ~134 MB with the default 4096² pixel cap), but
+`setInputLimits` can raise `maxPixels` far enough to cross 2^31. The honest fix
+is `putDouble` on Android (JS numbers are doubles, exact to 2^53) — deferred
+because it changes a wire type the contract froze as `int`, which is worth a
+deliberate decision rather than a late unilateral edit.
+
+Next: Chunks 7.2 (`renderSync` benchmark), 7.3 (lifecycle stress + leak tests),
+7.4 (on-device golden verification), then Phase 8.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty

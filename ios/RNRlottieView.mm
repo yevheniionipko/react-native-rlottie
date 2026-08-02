@@ -5,6 +5,7 @@
 
 #include "ErrorCode.h"
 #include "InputLimits.h"
+#include "Metrics.h"
 #include "PlayerError.h"
 
 #import "RNRlottieFramePresenter.h"
@@ -106,6 +107,23 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
     // re-issuing the same native call every batch.
     BOOL _configureDirty;
     BOOL _sourceDirty;
+
+    // Phase 7: instrumentation bookkeeping — see -onDisplayLinkTick:.
+    //
+    // _lastTickTimestamp: the previous tick's CADisplayLink.timestamp, or 0
+    // meaning "no valid previous tick to compare" — reset to 0 whenever the
+    // display link (re)starts (-startDisplayLinkIfNeeded), so the tick right
+    // after a resume-from-background/off-window gap is never scored as a
+    // stall (that gap is expected, not jank).
+    NSTimeInterval _lastTickTimestamp;
+    // Cumulative since `metricsEnabled` was last turned on (reset on that
+    // transition, and never decremented otherwise) — consistent with the
+    // core's own framesRendered/framesDropped/bufferAllocCount counters,
+    // which are likewise cumulative rather than windowed.
+    NSUInteger _uiStallCount;
+    double _uiStallMaxMs;
+    // 0 means "never emitted (since enabling)" — the throttle gate below.
+    NSTimeInterval _lastMetricsEmitTimestamp;
 }
 
 @synthesize player = _player;
@@ -232,6 +250,10 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
     if (_displayLink || !self.window) {
         return;
     }
+    // Phase 7: the gap between this (re)start's first tick and whatever came
+    // before it is a pause/backgrounding interval, not jank — see the ivar's
+    // doc comment above.
+    _lastTickTimestamp = 0;
     RNRlottieDisplayLinkProxy *proxy = [[RNRlottieDisplayLinkProxy alloc] initWithTarget:self];
     _displayLink = [CADisplayLink displayLinkWithTarget:proxy selector:@selector(onDisplayLinkTick:)];
     [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
@@ -245,8 +267,73 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
 // CADisplayLink's actual selector target (kept distinct from the public
 // -onDisplayTick: so the latter has a clean, testable `(double)` signature
 // per the plan's contract rather than a `(CADisplayLink *)` one).
+//
+// Phase 7: this is also where ui-stall detection and the throttled onMetrics
+// emission live — both are driven off the SAME display-clock tick already
+// used for playback, per docs/bridge-contract.md's explicit instruction not
+// to add a separate timer thread. Stall detection runs BEFORE
+// -onDisplayTick: (so it reflects the raw tick cadence, not anything that
+// call might itself take); metrics emission runs AFTER (so a just-published
+// frame from this very tick is reflected in framesRendered).
 - (void)onDisplayLinkTick:(CADisplayLink *)link {
-    [self onDisplayTick:link.timestamp];
+    const double now = link.timestamp;
+    if (_metricsEnabled) {
+        [self rnrlottie_recordStallIfNeededAtTimestamp:now expectedInterval:link.duration];
+    }
+    _lastTickTimestamp = now;
+    [self onDisplayTick:now];
+    if (_metricsEnabled) {
+        [self rnrlottie_maybeEmitMetricsAtTimestamp:now];
+    }
+}
+
+// Phase 7: `uiStallCount`/`uiStallMaxMs` (docs/bridge-contract.md). A "stall"
+// is a tick whose gap from the previous tick exceeds 1.5x the display link's
+// own expected interval — routine scheduling jitter is well under that, so
+// this does not fire on ordinary frame-to-frame variance.
+- (void)rnrlottie_recordStallIfNeededAtTimestamp:(double)now
+                                 expectedInterval:(NSTimeInterval)expectedInterval {
+    if (_lastTickTimestamp <= 0) {
+        return;  // First tick since (re)start — see -startDisplayLinkIfNeeded.
+    }
+    const double expected = expectedInterval > 0 ? expectedInterval : (1.0 / 60.0);
+    const double gap = now - _lastTickTimestamp;
+    if (gap > expected * 1.5) {
+        _uiStallCount += 1;
+        const double gapMs = gap * 1000.0;
+        if (gapMs > _uiStallMaxMs) {
+            _uiStallMaxMs = gapMs;
+        }
+    }
+}
+
+// Phase 7: throttled to <=1/sec (docs/bridge-contract.md "Phase 7
+// additions"). No-ops silently if `onMetrics` isn't wired (JS never set it),
+// or before the first second has elapsed since `metricsEnabled` was last
+// switched on (see -setMetricsEnabled: below, which zeroes
+// _lastMetricsEmitTimestamp on that transition).
+- (void)rnrlottie_maybeEmitMetricsAtTimestamp:(double)now {
+    if (!self.onMetrics) {
+        return;
+    }
+    if (_lastMetricsEmitTimestamp > 0 && (now - _lastMetricsEmitTimestamp) < 1.0) {
+        return;
+    }
+    _lastMetricsEmitTimestamp = now;
+    const rnrlottie::MetricsSnapshot snap = [_player metricsSnapshot];
+    self.onMetrics(@{
+        @"parseMs" : @(snap.parseMs),
+        @"firstFrameMs" : @(snap.firstFrameMs),
+        @"renderP50Ms" : @(snap.renderP50Ms),
+        @"renderP95Ms" : @(snap.renderP95Ms),
+        @"renderP99Ms" : @(snap.renderP99Ms),
+        @"framesRendered" : @(snap.framesRendered),
+        @"framesDropped" : @(snap.framesDropped),
+        @"bufferAllocCount" : @(snap.bufferAllocCount),
+        @"peakBufferBytes" : @(snap.peakBufferBytes),
+        @"uiStallCount" : @(_uiStallCount),
+        @"uiStallMaxMs" : @(_uiStallMaxMs),
+    });
 }
 
 // Tick → PlaybackController.advance → coordinator.requestFrame, per the
@@ -427,6 +514,27 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
     [_player seekToProgress:progress];
 }
 
+#pragma mark - Chunk 2.3 / Phase 7: metricsEnabled
+
+// Not coalesced with the playback-shaping props: gating collection on/off
+// has no ordering dependency on anything else in a prop transaction (same
+// rationale as `colorOverrides` et al.), applied immediately.
+- (void)setMetricsEnabled:(BOOL)metricsEnabled {
+    if (_metricsEnabled == metricsEnabled) {
+        return;
+    }
+    _metricsEnabled = metricsEnabled;
+    if (metricsEnabled) {
+        // Fresh window: a stall/emit history accumulated before a prior
+        // disable would be stale and misleading if attributed to this new
+        // enabled period.
+        _uiStallCount = 0;
+        _uiStallMaxMs = 0;
+        _lastMetricsEmitTimestamp = 0;
+    }
+    [_player setMetricsEnabled:metricsEnabled];
+}
+
 #pragma mark - Chunk 2.3: playback-shaping coalescing
 
 // Contract: loop/repeatCount/speed/startFrame/endFrame/autoPlay must reach
@@ -589,6 +697,7 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
     self.onAnimationPause = nil;
     self.onAnimationLoop = nil;
     self.onAnimationFinish = nil;
+    self.onMetrics = nil;
 }
 
 @end

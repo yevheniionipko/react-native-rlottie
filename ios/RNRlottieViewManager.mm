@@ -146,6 +146,9 @@ RCT_EXPORT_VIEW_PROPERTY(resizeMode, NSString)
 RCT_EXPORT_VIEW_PROPERTY(renderScale, double)
 RCT_EXPORT_VIEW_PROPERTY(pauseWhenInactive, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(cacheStrategy, NSString)
+// Phase 7 addition. Gates both native metrics collection and the throttled
+// `onMetrics` event below; default NO (RNRlottieView's ivar default).
+RCT_EXPORT_VIEW_PROPERTY(metricsEnabled, BOOL)
 
 // `source` needs conversion (it's a JS object, not a scalar/NSString), so it
 // is the one prop that goes through RCT_CUSTOM_VIEW_PROPERTY rather than
@@ -258,6 +261,11 @@ RCT_EXPORT_VIEW_PROPERTY(onAnimationStart, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onAnimationPause, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onAnimationLoop, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onAnimationFinish, RCTDirectEventBlock)
+// Phase 7 addition. RCT_EXPORT_VIEW_PROPERTY, NOT RCT_EXPORT_METHOD — this
+// does not participate in the numeric command declaration order below (see
+// the file-header comment); it is safe to add anywhere in the props/events
+// section.
+RCT_EXPORT_VIEW_PROPERTY(onMetrics, RCTDirectEventBlock)
 
 #pragma mark - Commands
 

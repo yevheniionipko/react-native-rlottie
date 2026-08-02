@@ -8,6 +8,7 @@
 
 #import "AnimationSource.h"
 #import "FrameSink.h"
+#import "Metrics.h"
 #import "PlaybackController.h"
 #import "PlayerError.h"
 #import "RenderCoordinator.h"
@@ -290,6 +291,22 @@ NSString *ToNSString(const std::string &s) {
         return;
     }
     _coordinator->setSurfaceSize(width, height);
+}
+
+#pragma mark - Phase 7: instrumentation
+
+- (void)setMetricsEnabled:(BOOL)enabled {
+    if (_torndown || !_coordinator) {
+        return;
+    }
+    _coordinator->setMetricsEnabled(enabled == YES);
+}
+
+- (rnrlottie::MetricsSnapshot)metricsSnapshot {
+    if (_torndown || !_coordinator) {
+        return rnrlottie::MetricsSnapshot{};
+    }
+    return _coordinator->metricsSnapshot();
 }
 
 #pragma mark - Tick & presentation

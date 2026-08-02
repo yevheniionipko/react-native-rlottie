@@ -25,6 +25,7 @@
 #include "AnimationSource.h"
 #include "InputLimits.h"
 #include "JniPlayerHandle.h"
+#include "Metrics.h"
 #include "ModelCacheController.h"
 #include "PixelFormat.h"
 #include "PlaybackController.h"
@@ -307,6 +308,51 @@ JNIEXPORT jboolean JNICALL Java_com_rlottie_RlottieBridge_nativePlayMarker(
     auto* h = asHandle(handle);
     if (h == nullptr) return JNI_FALSE;
     return h->playback().playMarker(toString(env, name)) ? JNI_TRUE : JNI_FALSE;
+}
+
+// Phase 7 additions (docs/bridge-contract.md "Phase 7 additions") ----------
+
+// Gates RenderCoordinator's own metrics collection. Thread-safe on the
+// coordinator, same as nativeSetColor above.
+JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeSetMetricsEnabled(
+    JNIEnv*, jclass, jlong handle, jboolean enabled) {
+    auto* h = asHandle(handle);
+    if (h == nullptr) return;
+    h->coordinator().setMetricsEnabled(enabled == JNI_TRUE);
+}
+
+// Returns rnrlottie::MetricsSnapshot (cpp/Metrics.h) encoded as 9 doubles, in
+// the fixed order documented on the Kotlin side
+// (RlottieBridge.nativeGetMetricsSnapshot): every field — the 5 doubles and
+// the 4 uint64_t counters — fits losslessly in a double at these magnitudes,
+// so one flat array keeps this JNI surface as narrow as
+// nativeGetInputLimits's LongArray. Returns a zero-length array (never
+// nullptr, barring a JVM-level allocation failure) for an invalid/stale
+// handle so the Kotlin caller can check `size < 9` rather than null-check.
+JNIEXPORT jdoubleArray JNICALL Java_com_rlottie_RlottieBridge_nativeGetMetricsSnapshot(
+    JNIEnv* env, jclass, jlong handle) {
+    auto* h = asHandle(handle);
+    if (h == nullptr) {
+        return env->NewDoubleArray(0);
+    }
+    const rnrlottie::MetricsSnapshot snap = h->coordinator().metricsSnapshot();
+    jdoubleArray result = env->NewDoubleArray(9);
+    if (result == nullptr) {
+        return nullptr;  // JVM-level OOM; left for the JVM to handle.
+    }
+    const jdouble values[9] = {
+        snap.parseMs,
+        snap.firstFrameMs,
+        snap.renderP50Ms,
+        snap.renderP95Ms,
+        snap.renderP99Ms,
+        static_cast<jdouble>(snap.framesRendered),
+        static_cast<jdouble>(snap.framesDropped),
+        static_cast<jdouble>(snap.bufferAllocCount),
+        static_cast<jdouble>(snap.peakBufferBytes),
+    };
+    env->SetDoubleArrayRegion(result, 0, 9, values);
+    return result;
 }
 
 JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeDestroy(JNIEnv*, jclass,

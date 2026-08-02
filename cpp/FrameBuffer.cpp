@@ -39,6 +39,15 @@ bool FrameBuffer::resize(Dimensions dims, PlayerError& outError) {
     dims_ = dims;
     backIndex_ = 0;
     frontIndex_.store(-1, std::memory_order_release);  // front invalid until publish
+
+    // Chunk 7.1: only reached on a genuine (re)allocation, never on the
+    // idempotent equal-dims early-return above or a rejected call.
+    allocCount_.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t bytes = static_cast<std::uint64_t>(pixels) * 4u * 2u;  // both buffers
+    std::uint64_t prevPeak = peakBytes_.load(std::memory_order_relaxed);
+    while (bytes > prevPeak &&
+          !peakBytes_.compare_exchange_weak(prevPeak, bytes, std::memory_order_relaxed)) {
+    }
     return true;
 }
 

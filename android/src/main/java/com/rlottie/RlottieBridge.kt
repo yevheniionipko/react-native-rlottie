@@ -119,6 +119,30 @@ internal object RlottieBridge {
      */
     @JvmStatic external fun nativePlayMarker(h: Long, name: String): Boolean
 
+    // --- Phase 7: instrumentation (docs/bridge-contract.md "Phase 7
+    // additions") -------------------------------------------------------------
+
+    /**
+     * Gates RenderCoordinator's own metrics collection; thread-safe on the
+     * coordinator, same as [nativeSetColor]. Default false natively.
+     */
+    @JvmStatic external fun nativeSetMetricsEnabled(h: Long, enabled: Boolean)
+
+    /**
+     * A snapshot of `rnrlottie::MetricsSnapshot` (cpp/Metrics.h), encoded as 9
+     * doubles in a fixed order — the mixed double/uint64 struct fields all fit
+     * losslessly in a JS-safe double (frame/alloc/byte counts here are nowhere
+     * near 2^53), so one flat array keeps this JNI surface as narrow as
+     * [nativeGetInputLimits]'s LongArray convention:
+     *
+     *   [parseMs, firstFrameMs, renderP50Ms, renderP95Ms, renderP99Ms,
+     *    framesRendered, framesDropped, bufferAllocCount, peakBufferBytes]
+     *
+     * Returns a zero-length array for an invalid/stale handle (never null) so
+     * [RlottieView] can check `size < 9` instead of null-checking.
+     */
+    @JvmStatic external fun nativeGetMetricsSnapshot(h: Long): DoubleArray
+
     // --- Global / process-wide (Chunk 3.4) -------------------------------------
     //
     // No handle: these back `ModelCacheController`, process-global rlottie

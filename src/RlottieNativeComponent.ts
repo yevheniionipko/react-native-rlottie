@@ -14,6 +14,7 @@ import type {
   RlottieErrorEvent,
   RlottieLifecycleEvent,
   RlottieLoadedEvent,
+  RlottieMetricsEvent,
   RlottieOpacityOverride,
   RlottieResizeMode,
   RlottieStrokeWidthOverride,
@@ -50,6 +51,7 @@ export interface RlottieNativeProps extends ViewProps {
   colorOverrides?: RlottieColorOverride[];
   opacityOverrides?: RlottieOpacityOverride[];
   strokeWidthOverrides?: RlottieStrokeWidthOverride[];
+  metricsEnabled?: boolean;
 
   onAnimationLoaded?: (event: NativeSyntheticEvent<RlottieLoadedEvent>) => void;
   onAnimationError?: (event: NativeSyntheticEvent<RlottieErrorEvent>) => void;
@@ -65,6 +67,7 @@ export interface RlottieNativeProps extends ViewProps {
   onAnimationFinish?: (
     event: NativeSyntheticEvent<RlottieLifecycleEvent>,
   ) => void;
+  onMetrics?: (event: NativeSyntheticEvent<RlottieMetricsEvent>) => void;
 }
 
 /** The host component. `RlottieView` (Chunk 4.3) is the only thing that renders it. */
