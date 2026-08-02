@@ -4,14 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repository is **greenfield**. As of this writing it contains only:
+**Phase 0 and Phase 1 are complete** (see `detailed-implementation-plan.md`).
+Built and verified so far:
 
-- `react-native-rlottie-implementation-plan.md` — the authoritative design document.
-- `.claude/agents/` — specialized agents for building this library.
+- Repo scaffold + tooling (`package.json`, `tsconfig`, lint/format configs).
+- Vendored + pinned rlottie (`cpp/third_party/rlottie/`, `scripts/update-rlottie.sh`).
+- Native build wiring: `android/` (CMake/Gradle) + `react-native-rlottie.podspec`.
+- Pixel-format report + golden (`docs/pixel-format-report.md`, `cpp/PixelFormat.h`).
+- The full shared C++ core in `cpp/`: `RlottiePlayerCore`, `FrameBuffer`,
+  `PlaybackController`, `RenderCoordinator` (+ `FrameSink`), `ModelCacheController`,
+  and the value/limit headers.
 
-No source, build system, or tests exist yet. Build/lint/test commands will be
-added as the phases in the plan are implemented; until then there is nothing to
-run. When you add tooling, document the real commands here.
+Next: Phase 2 (iOS) and Phase 3 (Android) — the platform adapters — which can
+proceed in parallel now that the core (through Chunk 1.5) exists.
+
+### Commands
+
+```bash
+# JS/TS (needs `npm install` first)
+npm run typecheck        # tsc --noEmit
+npm run lint             # eslint src
+npm run format:check     # prettier --check
+
+# Shared C++ core tests — plain + ASan/UBSan + TSan variants.
+# Uses CMake+CTest when available; otherwise a direct clang fallback.
+tests/run-tests.sh                 # all variants
+tests/run-tests.sh plain           # a single variant (plain|asan|tsan)
+
+# Re-vendor / bump the pinned rlottie revision
+scripts/update-rlottie.sh [<commit-sha>]
+```
+
+Native iOS/Android device builds require Xcode / the Android NDK (not present in
+every dev environment); Chunk 0.3 was verified via an equivalent host compile.
 
 ## What is being built
 

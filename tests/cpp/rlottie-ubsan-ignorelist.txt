@@ -1,0 +1,8 @@
+# UBSan ignore list for the vendored rlottie subtree.
+#
+# rlottie's arena allocator (src/vector/varenaalloc.cpp) applies a non-zero
+# offset to a null placeholder pointer to compute sizes — technically UB but
+# benign (no dereference). We do not patch vendored code, so suppress UBSan for
+# the third-party tree while keeping full coverage of our own code.
+[undefined]
+src:*/cpp/third_party/rlottie/*
