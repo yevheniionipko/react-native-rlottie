@@ -1484,6 +1484,56 @@ setters and 9 command methods with no duplicate erasure.
 | **Acceptance** | `configure`/`clearModelCache`/`getNativeVersion` resolve identically with `newArchEnabled` true and false; `getNativeVersion` returns the pinned SHA in both. |
 | **Agent** | RNEngineer |
 
+**Status: done.** The generated `NativeRlottieModuleSpec` (read from
+`android/build/generated/source/codegen/java/com/rlottie/spec/NativeRlottieModuleSpec.java`
+after running `generateCodegenArtifactsFromSchema` — the real Gradle task, not
+the standalone script that mis-packages this class per Chunk 9.1's note)
+matched §2.4 exactly: `abstract class NativeRlottieModuleSpec extends
+ReactContextBaseJavaModule implements TurboModule`, a public `NAME` constant,
+a concrete final-in-practice `getName()`, and three `@ReactMethod abstract`
+methods with the same signatures the three existing methods already had
+(`configure(ReadableMap, Promise)`, `clearModelCache(Promise)`,
+`getNativeVersion(Promise)`). `RlottieModule.kt` now extends that class
+instead of `ReactContextBaseJavaModule`; the three method bodies are
+byte-for-byte unchanged, and the `override fun getName()` plus its private
+`NAME` constant were deleted since the generated base already provides both.
+
+`RlottiePackage.kt` is now a `BaseReactPackage`: `getModule` returns
+`RlottieModule` for `NativeRlottieModuleSpec.NAME` and `null` otherwise,
+`getReactModuleInfoProvider()` returns one `ReactModuleInfo` with
+`isTurboModule = true`, `canOverrideExistingModule = false`, `isCxxModule =
+false`, `needsEagerInit = false`, and `createViewManagers` is unchanged
+(`BaseReactPackage`'s own `createViewManagers` override is not `final`, so a
+subclass can still override it directly rather than going through
+`getViewManagers()`/`ModuleSpec`).
+
+One trap found only by compiling against the generated class: `RlottieModule.NAME` does not resolve. `NAME` is a
+`public static final String` on the Java superclass `NativeRlottieModuleSpec`,
+and Kotlin does not re-expose an inherited Java static field under the
+subclass's own name — it must be addressed through the class that actually
+declares it (`NativeRlottieModuleSpec.NAME`). `RlottiePackage.kt` references it
+that way in both `getModule` and `getReactModuleInfoProvider`.
+
+Verification: `scripts/check-android-build.sh --gradle` was run against these
+two files. Chunk 9.4 was mid-edit concurrently in the same working tree
+(`RlottieEvents.kt`, `RlottieViewManager.kt`, and a new `RlottieEvent.kt` were
+all mid-flight and did not compile on their own at the time), so a direct
+in-place `--gradle` run could not isolate this chunk's result and touching
+those files was out of scope here. The two files were instead verified by
+copying the whole repo (symlinking `node_modules`, `cpp`, `src`) into a
+scratch directory, swapping in the last-committed (`HEAD`) versions of the
+three Chunk-9.4-owned files there, and running `assembleRelease` in that copy
+only — the real repo's working tree was never modified for this check. That
+build failed on an unrelated, pre-existing `Double`/`Int` mismatch between
+`HEAD`'s `RlottieEvents.kt` and the in-progress `RlottieView.kt` (Chunk 9.4's
+own metrics-type change, §3.4.1), confirming the failure was not caused by
+this chunk's files — `compileReleaseKotlin` produced zero errors attributable
+to `RlottieModule.kt` or `RlottiePackage.kt`. `scripts/check-android-build.sh
+--link` was also run for real (unaffected by this chunk, since no C++/JNI
+changed) and still exports 29 `Java_com_rlottie_*` symbols on all three ABIs.
+This chunk's result should be re-verified with a plain `--gradle` run once
+Chunk 9.4 lands and the tree is consistent again.
+
 ### Chunk 9.4 — Android event dispatch unification + metrics wire type
 | | |
 |---|---|

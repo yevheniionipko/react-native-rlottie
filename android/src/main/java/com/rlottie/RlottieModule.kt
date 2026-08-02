@@ -3,13 +3,12 @@ package com.rlottie
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.bridge.ReactContextBaseJavaModule
-import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableMap
+import com.rlottie.spec.NativeRlottieModuleSpec
 
 /**
- * Chunk 3.4 — the Android half of the global config module
+ * Chunk 3.4/9.3 — the Android half of the global config module
  * (docs/bridge-contract.md, "Global module"). Exposes **only** process-global
  * operations on rlottie's library-level model cache (`ModelCacheController`,
  * plan §15) via the new global JNI natives added to `RlottieBridge`/
@@ -26,14 +25,17 @@ import com.facebook.react.bridge.WritableMap
  * throws across the JNI boundary underneath, but a Kotlin-level failure is
  * still routed through `promise.reject` rather than propagated, so a bad call
  * from JS surfaces as a rejected promise, not a crash.
+ *
+ * Extends the generated [NativeRlottieModuleSpec] (a TurboModule) rather than
+ * `ReactContextBaseJavaModule` directly, so this one class works unmodified on
+ * both architectures — see docs/new-architecture-design.md §2.4. `getName()`
+ * and its `NAME` constant are provided by the generated spec and are not
+ * repeated here.
  */
 class RlottieModule(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext) {
+    NativeRlottieModuleSpec(reactContext) {
 
-    override fun getName(): String = NAME
-
-    @ReactMethod
-    fun configure(options: ReadableMap?, promise: Promise) {
+    override fun configure(options: ReadableMap?, promise: Promise) {
         try {
             val hasSize = options != null &&
                 options.hasKey(KEY_MODEL_CACHE_SIZE) &&
@@ -55,8 +57,7 @@ class RlottieModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    @ReactMethod
-    fun clearModelCache(promise: Promise) {
+    override fun clearModelCache(promise: Promise) {
         try {
             RlottieBridge.nativeClearModelCache()
             promise.resolve(null)
@@ -65,8 +66,7 @@ class RlottieModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    @ReactMethod
-    fun getNativeVersion(promise: Promise) {
+    override fun getNativeVersion(promise: Promise) {
         try {
             val result: WritableMap = Arguments.createMap()
             result.putString("rlottieCommit", RlottieBridge.nativeGetRlottieCommit())
@@ -78,7 +78,6 @@ class RlottieModule(reactContext: ReactApplicationContext) :
     }
 
     private companion object {
-        const val NAME = "RlottieModule"
         const val KEY_MODEL_CACHE_SIZE = "modelCacheSize"
 
         const val ERROR_INVALID_ARGUMENT = "INVALID_ARGUMENT"
