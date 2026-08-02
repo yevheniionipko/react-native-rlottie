@@ -24,6 +24,8 @@ npx --no-install tsc \
   "$ROOT/src/sha256.ts" \
   "$ROOT/src/source.ts" \
   "$ROOT/src/types.ts" \
+  "$ROOT/src/commands.ts" \
+  "$ROOT/src/RlottieNativeComponent.ts" \
   --outDir "$OUT" \
   --target ES2017 \
   --module commonjs \
@@ -39,3 +41,4 @@ cp "$ROOT/tests/js/stubs/react-native.js" "$OUT/node_modules/react-native.js"
 
 echo "== running tests"
 node "$ROOT/tests/js/source.test.js"
+node "$ROOT/tests/js/commands.test.js"

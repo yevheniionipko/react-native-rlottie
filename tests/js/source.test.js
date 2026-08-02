@@ -32,8 +32,14 @@ function ok(label, cond, extra) {
 // --- SHA-256 correctness, against node:crypto -------------------------------
 // The cache key is only as trustworthy as the digest under it.
 
-ok('sha256 empty', sha256Hex('') === crypto.createHash('sha256').update('').digest('hex'));
-ok('sha256 abc', sha256Hex('abc') === crypto.createHash('sha256').update('abc').digest('hex'));
+ok(
+  'sha256 empty',
+  sha256Hex('') === crypto.createHash('sha256').update('').digest('hex'),
+);
+ok(
+  'sha256 abc',
+  sha256Hex('abc') === crypto.createHash('sha256').update('abc').digest('hex'),
+);
 
 for (let i = 0; i < 130; i++) {
   // Sweeps the 55/56/63/64/119/120-byte padding boundaries, where a
@@ -41,7 +47,8 @@ for (let i = 0; i < 130; i++) {
   const s = 'a'.repeat(i);
   ok(
     `sha256 len ${i}`,
-    sha256Hex(s) === crypto.createHash('sha256').update(s, 'utf8').digest('hex'),
+    sha256Hex(s) ===
+      crypto.createHash('sha256').update(s, 'utf8').digest('hex'),
   );
 }
 
@@ -55,7 +62,8 @@ for (const [label, s] of [
 ]) {
   ok(
     `sha256 utf8 ${label}`,
-    sha256Hex(s) === crypto.createHash('sha256').update(s, 'utf8').digest('hex'),
+    sha256Hex(s) ===
+      crypto.createHash('sha256').update(s, 'utf8').digest('hex'),
   );
 }
 
@@ -67,7 +75,10 @@ ok('object json accepted', first.ok && typeof first.source.json === 'string');
 
 // The memoization guarantee: same object identity => same result object, which
 // means JSON.stringify + sha256 ran only once.
-ok('object source memoized on identity', normalizeSource({json: obj}) === first);
+ok(
+  'object source memoized on identity',
+  normalizeSource({json: obj}) === first,
+);
 
 const equalContent = normalizeSource({json: {v: '5.7.4', layers: [{ty: 4}]}});
 ok(
@@ -75,7 +86,9 @@ ok(
   equalContent.ok && equalContent.source.cacheKey === first.source.cacheKey,
 );
 
-const differentContent = normalizeSource({json: {v: '5.7.4', layers: [{ty: 5}]}});
+const differentContent = normalizeSource({
+  json: {v: '5.7.4', layers: [{ty: 5}]},
+});
 ok(
   'different content produces a different cacheKey',
   differentContent.source.cacheKey !== first.source.cacheKey,
@@ -101,8 +114,14 @@ ok(
   sameLabelA.source.cacheKey === `${sha256Hex('{"a":1}')}:shared`,
 );
 
-const withResource = normalizeSource({json: '{"a":1}', resourcePath: '/data/app/assets'});
-ok('resourcePath preserved', withResource.ok && withResource.source.resourcePath === '/data/app/assets');
+const withResource = normalizeSource({
+  json: '{"a":1}',
+  resourcePath: '/data/app/assets',
+});
+ok(
+  'resourcePath preserved',
+  withResource.ok && withResource.source.resourcePath === '/data/app/assets',
+);
 ok('resourcePath omitted when unset', !('resourcePath' in sameLabelA.source));
 
 for (const uri of [
@@ -114,12 +133,16 @@ for (const uri of [
   ok(`uri accepted: ${uri}`, normalizeSource({uri}).ok);
 }
 
-ok('path accepted', normalizeSource({path: '/data/user/0/app/files/a.json'}).ok);
+ok(
+  'path accepted',
+  normalizeSource({path: '/data/user/0/app/files/a.json'}).ok,
+);
 
 const assetResult = normalizeSource(42);
 ok(
   'require()d asset id resolves through the asset registry',
-  assetResult.ok && assetResult.source.uri === 'asset:///animations/spinner.json',
+  assetResult.ok &&
+    assetResult.source.uri === 'asset:///animations/spinner.json',
 );
 
 // --- Rejected sources: typed failure, never a throw -------------------------
@@ -160,13 +183,22 @@ for (const [label, input] of [
 
 // --- isSameNormalizedSource -------------------------------------------------
 
-ok('same content compares equal', isSameNormalizedSource(first.source, equalContent.source));
+ok(
+  'same content compares equal',
+  isSameNormalizedSource(first.source, equalContent.source),
+);
 ok(
   'different content compares unequal',
   !isSameNormalizedSource(first.source, differentContent.source),
 );
-ok('undefined pair compares equal', isSameNormalizedSource(undefined, undefined));
-ok('one-sided undefined compares unequal', !isSameNormalizedSource(first.source, undefined));
+ok(
+  'undefined pair compares equal',
+  isSameNormalizedSource(undefined, undefined),
+);
+ok(
+  'one-sided undefined compares unequal',
+  !isSameNormalizedSource(first.source, undefined),
+);
 ok(
   'differing resourcePath compares unequal',
   !isSameNormalizedSource(

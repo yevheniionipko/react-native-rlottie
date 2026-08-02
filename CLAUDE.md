@@ -114,9 +114,32 @@ Known follow-ups (not defects in the above):
   key can never alias two different payloads. SHA-256 is hand-rolled because the
   package has zero runtime deps and RN has no sync crypto.
 
-Next: Chunks 4.2-4.4 (native component + commands, `RlottieView.tsx`, module and
-exports). 4.2 should prefer the string command path — see the iOS numeric-id
-fragility section in `docs/bridge-contract.md`.
+**Chunks 4.2 and 4.3 are complete** — `src/RlottieNativeComponent.ts`,
+`src/commands.ts`, `src/RlottieView.tsx`.
+
+- **Command dispatch never hardcodes the numeric id.** It resolves via
+  `UIManager.getViewManagerConfig('RlottieView').Commands[name]`, which
+  `PaperUIManager.js` computes at runtime from the manager's real exported
+  methods, and falls back to passing the command NAME string. Both avoid the
+  iOS raw-array-index path, where a drifted integer is an `NSRangeException`
+  that kills the app rather than a recoverable error. Do not "simplify" this to
+  `RLOTTIE_COMMAND_IDS[name]` — that enum exists for reference, not dispatch.
+- `dispatchRlottieCommand` never throws and returns `false` for an unmounted
+  view, so `ref.play()` racing mount is safe.
+- `RlottieView` reports a source-normalization failure as `onAnimationError`
+  from an effect (never during render), deduped on the FAILURE CONTENT, not on
+  the `source` object's identity — consumers pass inline `source={{uri}}`
+  literals, so an identity guard would re-fire every render and any consumer
+  setting state in that handler would spin.
+
+Not covered by tests: `RlottieView`'s render-time behaviour (the dedup and the
+stable-source-identity logic). Verifying it needs `react-test-renderer`, which
+would be a new devDependency — the reasoning is documented at each site instead.
+
+Next: Chunk 4.4 (`src/RlottieModule.ts`, `src/index.ts`, package exports).
+`RlottieView.tsx` exports both named and default; re-export the public types
+from `src/types.ts`. The module's three methods are Promise-based on BOTH
+platforms.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty
