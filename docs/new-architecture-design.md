@@ -576,14 +576,15 @@ interface NativeCommands {
   reset: (ref: React.ElementRef<HostComponent<NativeProps>>) => void;
   seekToProgress: (ref: React.ElementRef<HostComponent<NativeProps>>, progress: CodegenTypes.Double) => void;
   seekToFrame: (ref: React.ElementRef<HostComponent<NativeProps>>, frame: CodegenTypes.Int32) => void;
-  setSpeed: (ref: React.ElementRef<HostComponent<NativeProps>>, speed: CodegenTypes.Double) => void;
+  // NOT `setSpeed` — collides with the `speed` prop on Android; see §3.3.
+  setPlaybackSpeed: (ref: React.ElementRef<HostComponent<NativeProps>>, speed: CodegenTypes.Double) => void;
   playMarker: (ref: React.ElementRef<HostComponent<NativeProps>>, name: string) => void;
 }
 
 export const Commands: NativeCommands = codegenNativeCommands<NativeCommands>({
   supportedCommands: [
     'play', 'pause', 'resume', 'stop', 'reset',
-    'seekToProgress', 'seekToFrame', 'setSpeed', 'playMarker',
+    'seekToProgress', 'seekToFrame', 'setPlaybackSpeed', 'playMarker',
   ],
 });
 
@@ -778,6 +779,36 @@ renumbered, `__reservedCommandSlot0` must stay at declaration index 0 in
 that applies to Fabric, and the Fabric component view must not grow a reserved
 slot or any declaration-order sensitivity — adding one would be cargo-culting a
 constraint that does not exist on this path.
+
+### The one Fabric command that is NOT named after its public API: `setSpeed`
+
+**The Fabric command is `setPlaybackSpeed`, not `setSpeed`.** This is forced, not
+a preference, and it was found by actually compiling the generated Java (Chunk
+9.2) rather than by reading codegen's source.
+
+Android merges prop setters and command methods into a **single** generated
+interface, `RlottieViewManagerInterface<T>`. The `speed` prop generates
+`void setSpeed(T view, double value)` and a `setSpeed` command would generate
+`void setSpeed(T view, double speed)` — identical erasure, so `javac` fails with
+"method already defined". Because library codegen runs **unconditionally**
+(§1.5), this is not a new-architecture-only failure: it breaks the library's own
+Gradle build, and therefore every consumer's build, on both architectures.
+
+Scope and cost:
+
+- **iOS is unaffected** — props are a C++ struct and commands are a separate
+  Obj-C protocol, so `- (void)setSpeed:` never collides. The rename applies
+  there too only because the spec is shared.
+- **Nothing frozen changes.** The Fabric command name is a *new* identifier
+  introduced by this work. `docs/bridge-contract.md`'s Legacy command id 8 stays
+  named `setSpeed`, and the public JS API stays `ref.setSpeed(v)` — `src/commands.ts`
+  already branches on architecture (§3.3, "src/commands.ts"), so it maps the one
+  public name onto `setSpeed` (Legacy, by id) or `setPlaybackSpeed` (Fabric, by
+  name). Consumers never see the difference.
+- `setSpeed` is the **only** collision: no other command name equals
+  `set<PropName>` for any of the 16 props. Verified against the generated
+  interface. Any future command must be checked against that rule before being
+  added.
 
 ### iOS
 
@@ -1377,6 +1408,71 @@ confirmed end-to-end once 9.2 wires up the actual Gradle build.
 | **Acceptance** | `scripts/check-android-build.sh --link` still passes and the `Java_com_rlottie_*` symbols are still exported. `build/generated/source/codegen/{java,jni}` both populated. A standalone build still yields an AAR containing every Kotlin class plus both ABIs' `.so`. |
 | **Agent** | RNEngineer |
 | **Risks** | The standalone build is the likely casualty; it has broken silently before (Chunk 3.5). |
+
+**Status: done, with one blocking issue found and left for a later chunk to
+fix.** `android/build.gradle` applies `com.facebook.react` (buildscript
+classpath added, unversioned, resolved via composite-build substitution).
+Two new files were required for the standalone case, both absent before this
+chunk: `android/settings.gradle` (`includeBuild` of
+`node_modules/@react-native/gradle-plugin`, so the plugin coordinate resolves
+with no app project in the build) and `android/gradle.properties`
+(`android.useAndroidX=true`, required for AGP to resolve `react-android`'s
+AndroidX dependencies at all).
+
+Verified with a real Gradle invocation — `node_modules/@react-native/gradle-plugin/gradlew
+--project-dir android <task>`, using this machine's already-cached Gradle
+8.14.3 distribution — not just read from source:
+
+- `generateCodegenSchemaFromJavaScript` + `generateCodegenArtifactsFromSchema`
+  run and populate both `build/generated/source/codegen/java` and `.../jni`.
+  Unlike the standalone `generate-codegen-artifacts.js` path Chunk 9.1 used
+  (which hardcodes `com.facebook.fbreact.specs`), the real Gradle task
+  correctly emits `NativeRlottieModuleSpec` into `com.rlottie.spec`, confirming
+  9.1's `codegenConfig.android.javaPackageName` end-to-end.
+- No `react { reactNativeDir = ... }` override is set, and none is needed:
+  reading `GenerateCodegenArtifactsTask`/`GenerateCodegenSchemaTask` in
+  `ReactPlugin.kt` shows they read `reactNativeDir`/`codegenDir` off a
+  **root-project-scoped** `PrivateReactExtension` that a library's own
+  `react {}` block can only populate when some project in the build applies
+  `com.android.application` — never in a library-only build. What actually
+  makes the standalone case resolve `node_modules/react-native` correctly is
+  `android/settings.gradle` making this module the Gradle root project, so
+  `PrivateReactExtension`'s own convention default
+  (`<rootProject>/../node_modules/react-native`) lands on this repo's real
+  `node_modules`. This corrects this document's original §1.5 mitigation text,
+  which suggested the override would be needed.
+- `scripts/check-android-build.sh --link` still passes unchanged: all three
+  ABIs link and export 29 `Java_com_rlottie_*` symbols each.
+- `scripts/check-android-build.sh --gradle` (new mode, added this chunk) runs
+  the above codegen check plus `assembleRelease` and inspects the resulting
+  AAR. It passes: real AAR with `jni/arm64-v8a/` and `jni/x86_64/`
+  `libreact-native-rlottie.so`.
+- `android/settings.gradle` and `android/gradle.properties` are **excluded from
+  the npm tarball** (`package.json`'s `files`). Both exist only so `android/`
+  can build as its own Gradle root project; a consumer includes this library as
+  a *subproject*, where Gradle reads neither file. Shipping them is inert in
+  normal autolinking but would misfire for anyone doing
+  `includeBuild(...)` on the installed package, since this
+  `settings.gradle` resolves the RN Gradle plugin via a path relative to *this*
+  repo's `node_modules`.
+
+**A real, blocking bug was found in Chunk 9.1's spec here, and has since been
+fixed** (see §3.3, "The one Fabric command that is NOT named after its public
+API"). Codegen's per-view-manager Java interface merges prop setters and command
+methods into one interface, and the spec declared both a `speed` prop (generates
+`void setSpeed(T, double)`) and a `setSpeed` command (generates
+`void setSpeed(T, double)`, identical erasure) — `RlottieViewManagerInterface.java`
+failed to compile with "method setSpeed(T,double) is already defined". This was
+not a standalone-build artifact: any consumer, old or new architecture, runs
+this same codegen and would hit the same compile failure, because library
+codegen is unconditional (§1.5). It was proven by hand-deleting the duplicate
+generated line and re-running `assembleRelease`, which then succeeded and
+produced a real AAR — `android/build/outputs/aar/react-native-rlottie-release.aar`,
+containing `jni/arm64-v8a/` and `jni/x86_64/libreact-native-rlottie.so`, every
+existing Kotlin class, and the generated `com/rlottie/spec/NativeRlottieModuleSpec.class`.
+The Fabric command was renamed `setSpeed` → `setPlaybackSpeed` in the spec
+immediately after this chunk; the generated interface now declares 16 prop
+setters and 9 command methods with no duplicate erasure.
 
 ### Chunk 9.3 — Android TurboModule + package
 | | |

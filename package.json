@@ -38,6 +38,8 @@
     "!android/build",
     "!android/.cxx",
     "!android/.gradle",
+    "!android/settings.gradle",
+    "!android/gradle.properties",
     "!ios/build",
     "!**/.DS_Store",
     "!**/*.o",

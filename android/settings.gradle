@@ -1,0 +1,5 @@
+// Lets android/ build as a standalone Gradle project; a consuming app never
+// uses this file. See docs/new-architecture-design.md, Chunk 9.2 status note.
+includeBuild('../node_modules/@react-native/gradle-plugin')
+
+rootProject.name = 'react-native-rlottie'

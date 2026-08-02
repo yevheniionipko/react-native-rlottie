@@ -4,8 +4,9 @@
 #
 #   scripts/check-android-build.sh [<api-level>]           # syntax-only (fast)
 #   scripts/check-android-build.sh --link [<api-level>]    # real .so link
+#   scripts/check-android-build.sh --gradle                # real Gradle build
 #
-# Two modes, because the fast one is genuinely not sufficient:
+# Three modes, because the fast one is genuinely not sufficient:
 #
 #   default  Type-checks each JNI translation unit (-fsyntax-only) for every
 #            shipped ABI. Catches signature/API drift in seconds.
@@ -18,6 +19,14 @@
 #            line and hiding every JNI entry point — a syntax-only check passes
 #            happily while the library fails at the first native call on device.
 #
+#   --gradle Chunk 9.2. Runs the actual `com.facebook.react` Gradle plugin
+#            standalone (android/settings.gradle + android/gradle.properties
+#            make that possible with nothing inherited from an app) and
+#            assembles a real AAR: codegen runs, both ABIs' .so link, every
+#            Kotlin class compiles. See docs/new-architecture-design.md's
+#            Chunk 9.2 status note for what this currently proves and what it
+#            doesn't.
+#
 # Uses $ANDROID_NDK_HOME, else the newest NDK under $ANDROID_HOME/ndk.
 set -euo pipefail
 
@@ -26,8 +35,59 @@ MODE="syntax"
 if [ "${1:-}" = "--link" ]; then
   MODE="link"
   shift
+elif [ "${1:-}" = "--gradle" ]; then
+  MODE="gradle"
+  shift
 fi
 API="${1:-21}"
+status=0
+
+# --- --gradle: real standalone Gradle build (Chunk 9.2) ----------------------
+if [ "$MODE" = "gradle" ]; then
+  : "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+  export ANDROID_HOME
+  GRADLEW="$ROOT/node_modules/@react-native/gradle-plugin/gradlew"
+  if [ ! -x "$GRADLEW" ]; then
+    echo "no gradlew found at $GRADLEW (npm install first)" >&2
+    exit 2
+  fi
+
+  echo "== codegen"
+  "$GRADLEW" --project-dir "$ROOT/android" \
+      generateCodegenSchemaFromJavaScript generateCodegenArtifactsFromSchema
+
+  for d in java jni; do
+    if [ -z "$(find "$ROOT/android/build/generated/source/codegen/$d" -type f 2>/dev/null)" ]; then
+      echo "codegen did not populate build/generated/source/codegen/$d" >&2
+      status=1
+    fi
+  done
+
+  echo "== assembleRelease"
+  "$GRADLEW" --project-dir "$ROOT/android" assembleRelease
+
+  AAR="$(ls "$ROOT"/android/build/outputs/aar/*.aar 2>/dev/null | head -1)"
+  if [ -z "$AAR" ]; then
+    echo "assembleRelease did not produce an AAR" >&2
+    status=1
+  else
+    echo "-- AAR: $AAR"
+    READELF="$(command -v llvm-readelf || true)"
+    for ABI in arm64-v8a x86_64; do
+      SO="$(unzip -p "$AAR" "jni/$ABI/libreact-native-rlottie.so" 2>/dev/null | wc -c)"
+      if [ "$SO" -eq 0 ]; then
+        echo "   AAR missing jni/$ABI/libreact-native-rlottie.so"; status=1
+      else
+        echo "   jni/$ABI/libreact-native-rlottie.so present ($SO bytes)"
+      fi
+    done
+    KOTLIN_CLASSES="$(unzip -l "$AAR" 2>/dev/null | grep -c 'classes.jar' || true)"
+    [ "$KOTLIN_CLASSES" -gt 0 ] || { echo "   AAR missing classes.jar"; status=1; }
+  fi
+
+  if [ "$status" -eq 0 ]; then echo "ANDROID GRADLE BUILD OK"; else echo "ANDROID GRADLE BUILD FAILED"; fi
+  exit "$status"
+fi
 
 NDK="${ANDROID_NDK_HOME:-}"
 if [ -z "$NDK" ]; then
@@ -54,8 +114,6 @@ fi
 echo "NDK: $NDK (api $API)"
 OUT="$ROOT/build/android-syntax"
 mkdir -p "$OUT"
-
-status=0
 
 # --- --link: configure + build + assert exported symbols, per ABI ------------
 if [ "$MODE" = "link" ]; then

@@ -110,7 +110,9 @@ interface NativeCommands {
     ref: React.ElementRef<HostComponent<NativeProps>>,
     frame: CodegenTypes.Int32,
   ) => void;
-  setSpeed: (
+  // NOT `setSpeed`: that collides with the `speed` prop's generated setter on
+  // Android. See docs/new-architecture-design.md §3.3.
+  setPlaybackSpeed: (
     ref: React.ElementRef<HostComponent<NativeProps>>,
     speed: CodegenTypes.Double,
   ) => void;
@@ -129,7 +131,7 @@ export const Commands: NativeCommands = codegenNativeCommands<NativeCommands>({
     'reset',
     'seekToProgress',
     'seekToFrame',
-    'setSpeed',
+    'setPlaybackSpeed',
     'playMarker',
   ],
 });

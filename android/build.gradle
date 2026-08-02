@@ -28,11 +28,16 @@ buildscript {
     // library would fail at runtime with ClassNotFoundException, not at build
     // time. This was the missing piece before Chunk 3.5.
     classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${rlottieKotlinVersion}"
+    // Unversioned on purpose: resolved by composite-build substitution.
+    // See docs/new-architecture-design.md §1.5.
+    classpath "com.facebook.react:react-native-gradle-plugin"
   }
 }
 
 apply plugin: "com.android.library"
 apply plugin: "org.jetbrains.kotlin.android"
+// Runs codegen unconditionally for a library; see design doc §1.5.
+apply plugin: "com.facebook.react"
 
 def safeExtGet(prop, fallback) {
   rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
