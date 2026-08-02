@@ -32,6 +32,17 @@
 # there, since LSan works on Linux — rather than silently skipping:
 #   tests/run-tests.sh leaks        # ~15-20s on Darwin
 #
+# A seventh, OPT-IN variant, "golden-gen" (Chunk 7.4 Part A), builds and runs
+# tests/cpp/golden_gen.cpp, which REGENERATES tests/golden/<name>-frame<N>.argb32.raw
+# from tests/cpp/GoldenFixtures.h's table and prints each frame's sha256 plus
+# non-vacuity stats. It is the only thing allowed to write those files, is
+# NOT part of the default variant list. It fails only on a load/render error
+# or a VACUOUS fixture (fully transparent, or a single flat color); ongoing
+# byte-exact protection against unintended drift is tests/cpp/golden_tests.cpp
+# (part of the DEFAULT gate, every variant above), which reads the goldens
+# this generates but never writes them:
+#   tests/run-tests.sh golden-gen   # regenerate + print per-fixture stats
+#
 # Uses CMake + CTest when available; otherwise falls back to a direct clang
 # build with equivalent flags (so it runs without CMake installed).
 set -euo pipefail
@@ -116,14 +127,18 @@ build_fallback() {
   # test_harness.cpp does (fuzz_loadfromdata.cpp has none at all; the driver's
   # own main() would collide), so they're excluded from this glob.
   # bench_render.cpp (Chunk 7.2, built by run_bench_fallback) defines its own
-  # main() too and is excluded for the same reason.
+  # main() too and is excluded for the same reason. golden_gen.cpp (Chunk 7.4
+  # Part A, built by run_golden_gen_fallback) likewise has its own main() —
+  # it's the tool that WRITES tests/golden/*.raw, never part of the binary
+  # that reads and asserts on them (golden_tests.cpp, which stays in this glob).
   for src in \
     "$ROOT"/cpp/RlottiePlayerCore.cpp "$ROOT"/cpp/FrameBuffer.cpp \
     "$ROOT"/cpp/PlaybackController.cpp "$ROOT"/cpp/RenderCoordinator.cpp \
     "$ROOT"/cpp/ModelCacheController.cpp \
     "$ROOT"/android/src/main/cpp/JniPlayerHandle.cpp \
     "$ROOT"/android/src/main/cpp/AndroidFrameSink.cpp \
-    $(find "$ROOT/tests/cpp" -maxdepth 1 -name '*.cpp' -not -name 'fuzz_*' -not -name 'bench_*'); do
+    $(find "$ROOT/tests/cpp" -maxdepth 1 -name '*.cpp' -not -name 'fuzz_*' \
+        -not -name 'bench_*' -not -name 'golden_gen.cpp'); do
     o="$bdir/$(basename "$src").o"
     "$CXX" -std=c++17 -Wall -Wextra -Werror ${san[@]+"${san[@]}"} "${INC[@]}" \
       -DRNRLOTTIE_TEST_DATA_DIR="\"$ROOT/tests\"" -c "$src" -o "$o"
@@ -270,6 +285,45 @@ run_bench_fallback() {
   ( cd "$ROOT" && "$bdir/rnrlottie_bench_render" )
 }
 
+# --- golden-gen: regenerate Chunk 7.4 golden .raw frames --------------------
+run_golden_gen_cmake() {
+  local bdir="$ROOT/build/tests-golden-gen"
+  echo "== [cmake:golden-gen] configure/build =="
+  cmake -S "$ROOT/tests/cpp" -B "$bdir" -DRNRLOTTIE_SANITIZE=off >/dev/null
+  cmake --build "$bdir" -j --target rnrlottie_golden_gen >/dev/null
+  echo "== [cmake:golden-gen] run =="
+  ( cd "$ROOT" && "$bdir/rnrlottie_golden_gen" )
+}
+
+run_golden_gen_fallback() {
+  local bdir="$ROOT/build/fallback-golden-gen"
+  local rldir="$bdir/rlottie"
+  mkdir -p "$rldir"
+
+  if [ ! -f "$rldir/.done" ]; then
+    echo "== [clang:golden-gen] compiling vendored rlottie =="
+    local i=0 f
+    while IFS= read -r f; do
+      "$CXX" -std=c++14 -fno-exceptions -fno-rtti -U__ARM_NEON__ -DNDEBUG -O1 -g \
+        "${INC[@]}" -c "$f" -o "$rldir/rl_$((i++)).o"
+    done < <(rlottie_srcs)
+    touch "$rldir/.done"
+  fi
+
+  echo "== [clang:golden-gen] compiling core + generator entry point =="
+  local objs=() src o
+  for src in "$ROOT"/cpp/RlottiePlayerCore.cpp "$ROOT"/cpp/FrameBuffer.cpp \
+             "$ROOT"/tests/cpp/golden_gen.cpp; do
+    o="$bdir/$(basename "$src").o"
+    "$CXX" -std=c++17 -Wall -Wextra -Werror "${INC[@]}" \
+      -DRNRLOTTIE_TEST_DATA_DIR="\"$ROOT/tests\"" -c "$src" -o "$o"
+    objs+=("$o")
+  done
+  "$CXX" "$rldir"/rl_*.o "${objs[@]}" -o "$bdir/rnrlottie_golden_gen" -lpthread
+  echo "== [clang:golden-gen] run =="
+  ( cd "$ROOT" && "$bdir/rnrlottie_golden_gen" )
+}
+
 # --- leaks: the actual leak-clean gate (Chunk 7.3) --------------------------
 #
 # See the header comment above for why this is Darwin-`leaks`-based rather
@@ -334,6 +388,12 @@ for v in "${VARIANTS[@]}"; do
       run_bench_cmake || status=1
     else
       run_bench_fallback || status=1
+    fi
+  elif [ "$v" = "golden-gen" ]; then
+    if command -v cmake >/dev/null 2>&1; then
+      run_golden_gen_cmake || status=1
+    else
+      run_golden_gen_fallback || status=1
     fi
   elif [ "$v" = "leaks" ]; then
     run_leaks || status=1

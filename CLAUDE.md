@@ -297,8 +297,52 @@ Not covered, and NOT approximated headlessly (see the doc): background/
 foreground, JS reload, React root destruction, real ViewManager-level mount/
 unmount, and genuine OS low-memory notifications. All need a device/emulator.
 
-Next: 7.4 (on-device golden verification — genuinely needs hardware), then
-Phase 8.
+**Chunk 7.4 is complete — Phase 7 is done.** `docs/golden-verification.md` is the
+authority; read it before adding a fixture, changing a tolerance, or
+regenerating a golden.
+
+- Six 64×64 fixtures (`tests/fixtures/golden/`: shapes, masks, gradients,
+  transparency, precomp, markers), 20 golden frames, verified on **three**
+  runners that all `#include` the SAME `tests/cpp/GoldenFixtures.h` table and
+  `tests/cpp/GoldenCompare.h` comparator — never a per-platform copy (the
+  `InputLimits.h` drift hazard again). Both headers are std-only so the NDK and
+  `iphonesimulator` builds consume them unchanged.
+- **A simulator/emulator turned out to be reachable after all** (this repo's
+  earlier notes assumed 7.4 needed hardware): `scripts/run-golden-ios.sh`
+  (`simctl spawn` of a plain binary — no app bundle, no XCTest) and
+  `scripts/run-golden-android.sh` (NDK executable over `adb shell`, plus a
+  `javac`+`d8`+`app_process` leg — no gradle, no APK). Both opt-in, both fail
+  loudly rather than skipping when the SDK/NDK/device is absent.
+- **Tolerance ended up at 0/0 on both platforms.** iOS: 100/100 checks
+  byte-exact through the real `RNRlottieFramePresenter`, including a
+  deliberately padded-stride front buffer. Android: 160/160 native checks
+  byte-exact. Only the real-`Bitmap` leg needs slack (opaque exact; blended ±2,
+  observed max **1**) because `getPixel()` un-premultiplies — and each frame
+  prints `worstBlendedDelta=<observed>/<allowed>` so that constant stays
+  evidenced. **Do not loosen the core leg**: it needing tolerance would mean
+  the render is nondeterministic across platforms, a bug to fix.
+- The Android run finally makes `kAndroidNeedsChannelSwap = true` a
+  **measurement**: a real ARGB_8888 `Bitmap` fed bytes `FF,00,00,FF` returns
+  `getPixel() == 0xFFFF0000`. Until now that rested on Android's docs alone.
+- **Non-vacuity floors are per fixture, not global.** A Lottie that renders
+  fully transparent makes a golden gate pass vacuously, and a global `>0%`
+  floor only helps until someone REGENERATES the goldens — the new golden then
+  agrees with the new near-blank render. `GoldenFixtures.h` pins each fixture's
+  measured floor and `golden-gen` refuses to write below it.
+- Fixture trap found the hard way: **`masksProperties` does nothing unless the
+  layer also sets `"hasMask": true`** (rlottie builds a `LayerMask` only when
+  `mLayerData->mHasMask`, parsed from that separate key). The fixture rendered
+  an opaque, mask-free canvas while loading "successfully".
+
+Deliberate gaps (see §6 of the doc): no physical hardware — the Android scripts
+work unchanged on a plugged-in phone, but the iOS one does NOT (`simctl spawn`
+is simulator-only; a real device needs a signed test host). No GPU/compositing
+or screenshot comparison, so nothing verifies what `CALayer`/the Android view
+compositor finally displays. No text/image fixtures (they need external
+font/raster resources; a fixture whose resource fails to resolve renders blank —
+the exact vacuity trap above). arm64 only for golden pixels.
+
+Next: Phase 8.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty
@@ -318,6 +362,12 @@ npm run format:check     # prettier --check  (NOTE: several .md files at repo
 # Uses CMake+CTest when available; otherwise a direct clang fallback.
 tests/run-tests.sh                 # all variants
 tests/run-tests.sh plain           # a single variant (plain|asan|tsan)
+
+# Chunk 7.4 golden verification. The host half is in the DEFAULT gate above;
+# these two legs are opt-in because they need a simulator/emulator or device.
+tests/run-tests.sh golden-gen      # regenerate tests/golden/*.raw (the ONLY writer)
+scripts/run-golden-ios.sh          # iOS Simulator: core + real CGImage presenter
+scripts/run-golden-android.sh      # Android: core + channel swap + real Bitmap
 
 # Android native build checks.
 # Syntax-only (fast): type-checks each JNI TU per ABI.

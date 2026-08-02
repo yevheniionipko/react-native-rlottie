@@ -48,8 +48,12 @@ file(GLOB TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 # a separate libFuzzer binary (Chunk 5.5, target below), never part of the
 # CHECK/TEST binary built from TEST_SOURCES. bench_render.cpp (Chunk 7.2) is
 # likewise a separate opt-in binary with its own main() (target below).
+# golden_gen.cpp (Chunk 7.4 Part A) is the same story: its own main(), the
+# only thing allowed to WRITE tests/golden/*.raw (target below). golden_tests.cpp
+# stays in TEST_SOURCES — it only READS those files and is part of the gate.
 list(FILTER TEST_SOURCES EXCLUDE REGEX "/fuzz_[^/]*\\.cpp$")
 list(FILTER TEST_SOURCES EXCLUDE REGEX "/bench_[^/]*\\.cpp$")
+list(FILTER TEST_SOURCES EXCLUDE REGEX "/golden_gen\\.cpp$")
 
 add_executable(rnrlottie_tests
   ${TEST_SOURCES}
@@ -107,3 +111,18 @@ target_compile_definitions(rnrlottie_bench_render PRIVATE
   RNRLOTTIE_TEST_DATA_DIR="${REPO}/tests")
 target_compile_options(rnrlottie_bench_render PRIVATE -Wall -Wextra -O2)
 target_link_libraries(rnrlottie_bench_render PRIVATE rlottie::rlottie)
+
+# --- Chunk 7.4 (Part A): golden regeneration tool ----------------------------
+#
+# Opt-in, NOT added to `add_test` / the default `ctest` run — see run-tests.sh's
+# `golden-gen` variant. The only target permitted to write tests/golden/*.raw.
+add_executable(rnrlottie_golden_gen
+  golden_gen.cpp
+  ${REPO}/cpp/RlottiePlayerCore.cpp
+  ${REPO}/cpp/FrameBuffer.cpp
+)
+target_include_directories(rnrlottie_golden_gen PRIVATE ${REPO}/cpp)
+target_compile_definitions(rnrlottie_golden_gen PRIVATE
+  RNRLOTTIE_TEST_DATA_DIR="${REPO}/tests")
+target_compile_options(rnrlottie_golden_gen PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(rnrlottie_golden_gen PRIVATE rlottie::rlottie)
