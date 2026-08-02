@@ -99,21 +99,22 @@ No event may fire after the view is unmounted / dropped.
 
 ## Props
 
-| prop                | type   | notes                                                                                                                                                                                                   |
-| ------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`            | object | `{json?: string, path?: string, cacheKey?: string, resourcePath?: string}` after resolution. Full resolution of bundled/asset/content URIs is Chunk 2.4/3.4 — see below.                                |
-| `autoPlay`          | bool   | default `false`                                                                                                                                                                                         |
-| `loop`              | bool   | default `false`                                                                                                                                                                                         |
-| `repeatCount`       | int    | `0` = infinite when `loop`                                                                                                                                                                              |
-| `speed`             | double | default `1.0`; negative plays in reverse                                                                                                                                                                |
-| `progress`          | double | 0..1, seeks                                                                                                                                                                                             |
-| `startFrame`        | int    | default `0`                                                                                                                                                                                             |
-| `endFrame`          | int    | `0` = last frame                                                                                                                                                                                        |
-| `resizeMode`        | string | `contain` \| `cover` \| `stretch` \| `center`; default `contain`. **iOS only so far** — maps to `layer.contentsGravity`; Android's `onDraw` still always stretches (accepted + validated, but a no-op). |
-| `renderScale`       | double | default `1.0`                                                                                                                                                                                           |
-| `pauseWhenInactive` | bool   | default `true`                                                                                                                                                                                          |
-| `cacheStrategy`     | string | `none` \| `model`; default `model`. **iOS only so far** — plumbed into `useModelCache`; Android's source natives take no cache flag yet (Chunk 3.4).                                                    |
-| `colorOverrides`    | array  | `[{keyPath: string, color: string}]`, `color` as `#RRGGBB`/`#AARRGGBB`. Alpha is parsed but **discarded on both platforms** — `RenderCoordinator::setColor` has no alpha parameter.                     |
+| prop                 | type   | notes                                                                                                                                                                                                        |
+| -------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `source`             | object | `{json?: string, path?: string, cacheKey?: string, resourcePath?: string}` after resolution. Full resolution of bundled/asset/content URIs is Chunk 2.4/3.4 — see below.                                     |
+| `autoPlay`           | bool   | default `false`                                                                                                                                                                                              |
+| `loop`               | bool   | default `false`                                                                                                                                                                                              |
+| `repeatCount`        | int    | `0` = infinite when `loop`                                                                                                                                                                                   |
+| `speed`              | double | default `1.0`; negative plays in reverse                                                                                                                                                                     |
+| `progress`           | double | 0..1, seeks                                                                                                                                                                                                  |
+| `startFrame`         | int    | default `0`                                                                                                                                                                                                  |
+| `endFrame`           | int    | `0` = last frame                                                                                                                                                                                             |
+| `resizeMode`         | string | `contain` \| `cover` \| `stretch` \| `center`; default `contain`. **iOS only so far** — maps to `layer.contentsGravity`; Android's `onDraw` still always stretches (accepted + validated, but a no-op).      |
+| `renderScale`        | double | default `1.0`                                                                                                                                                                                                |
+| `pauseWhenInactive`  | bool   | default `true`                                                                                                                                                                                               |
+| `cacheStrategy`      | string | `none` \| `model`; default `model`. **iOS only so far** — plumbed into `useModelCache`; Android's source natives take no cache flag yet (Chunk 3.4).                                                         |
+| `colorOverrides`     | array  | `[{keyPath: string, color: string}]`, `color` as `#RRGGBB`/`#AARRGGBB`. Alpha is parsed but **discarded on both platforms** — `RenderCoordinator::setColor` has no alpha parameter.                          |
+| `allowRemoteSources` | bool   | default `false`. **JS-only gate (Chunk 5.4); never crosses the bridge.** `RlottieView` consumes it in `normalizeSource` and does not forward it in `RlottieNativeProps` — see "Remote loading policy" below. |
 
 Playback-shaping props (`loop`, `repeatCount`, `speed`, `startFrame`, `endFrame`,
 `autoPlay`) map onto the single native `configure(...)` call, so they must be
@@ -161,6 +162,33 @@ and neither an alias nor a platform-conditional form should be reintroduced.
 v1 **rejects** with `INVALID_SOURCE` (v1.1 territory, plan §3): `http(s)://`
 remote URIs, `.lottie` containers, and any scheme not on the allow-list. Never
 silently fall back to a different source kind.
+
+### Remote loading policy (Chunk 5.4 — the gate, not the download)
+
+Plan §16 wants remote loading opt-in via `<RlottieView allowRemoteSources
+source={{uri: 'https://...'}} />`. v1 stubs the gate; v1.1 does the actual
+fetch. Concretely, in v1:
+
+- `allowRemoteSources` is a **JS-only prop**. `src/source.ts`'s
+  `normalizeSource(source, allowRemoteSources)` uses it to pick which
+  rejection message to return; it never reaches `RlottieNativeProps` or either
+  native adapter (`src/RlottieNativeComponent.ts` deliberately omits it).
+- An `https://` `source.uri` is `INVALID_SOURCE` **either way** — the flag
+  changes wording, not outcome. Without the flag, the message tells the
+  developer the flag exists and what it will eventually do. With the flag set,
+  the message says remote loading is genuinely not implemented yet in this
+  version, rather than implying the URL is malformed.
+- `http://` (no TLS) is **always** `INVALID_SOURCE`, flag or no flag — plan
+  §16 mandates HTTPS-only for any future remote loading, and that is not
+  something `allowRemoteSources` can opt out of.
+- **The TS gate is defence in depth, not the only check.** Both native
+  resolvers (`RNRlottieSourceResolver` / `RlottieSourceResolver.kt`) must
+  independently reject `http(s)://` regardless of what crosses the bridge —
+  they cannot assume a well-behaved JS layer sent them, since a native
+  adapter can in principle be driven by anything holding a view handle. When
+  the real fetch path lands in v1.1, this row must be revisited; until then
+  neither the C++ core nor either native adapter performs network I/O
+  (plan §12/§16).
 
 Security rules (plan §16), binding on both resolvers:
 

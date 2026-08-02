@@ -153,8 +153,46 @@ load reading React 19 internals). To close this gap, either pin
 0.81 itself expects React 19, so the devDependency pin at 18.2.0 is already out
 of step with `react-native@0.81.0`.
 
-Next: **Phase 5** (caching + source hardening). Chunk 5.3 completes the cache-key
-formula — see the scope notes in `src/source.ts`.
+**Phase 5 is complete** (5.1–5.5). Highlights and the traps worth knowing:
+
+- **`rnrlottie::currentInputLimits()` / `setInputLimits()`** (`cpp/InputLimits.h`,
+  header-only, mutex-guarded) is the ONE source of limits. Never construct
+  `InputLimits{}` locally and never hardcode a copy — Android did the latter and
+  it was the drift hazard 5.1 existed to kill. Android reads it over JNI
+  (`nativeGetInputLimits`), iOS includes the header.
+- **JSON nesting depth is a crash guard, not a policy knob.** rlottie's vendored
+  rapidjson is recursive-descent, so deep input exhausts the native stack and
+  kills the process — unrecoverable, no typed error possible. Measured: depth
+  100,000 is only ~1.9 MB (11% of the byte limit) and reproducibly SIGSEGV'd an
+  8 MiB stack; the render worker's stack is far smaller. `checkJsonDepth()` now
+  rejects over-deep JSON before rlottie sees it. **A byte limit does NOT bound
+  nesting** — the nesting token is ~18 bytes and a bare `[` is one.
+- Cache keys: `sha256(json):callerKey:rlottieCommit:v1:resourcePath`, composed in
+  `cpp/CacheKey.h`. The hash is recomputed natively over the real bytes and sits
+  first, so a caller-supplied key can never alias two payloads.
+- `tests/run-tests.sh fuzz` is an opt-in bounded smoke run, not part of the gate.
+
+Known gaps, deliberately not closed:
+
+- **The depth guard covers the Data path only.** `loadFromFile` hands a path
+  straight to rlottie, which reads and parses the bytes itself, so a hostile
+  file on disk still reaches the recursive parser. Closing it means the core
+  reading the file itself — a change to *how* File sources load. The resolvers
+  confine file sources to app-private storage, which narrows but does not
+  eliminate the vector (a `content://` copy or downloaded asset lands there).
+- **Real libFuzzer never ran here**: this machine's Xcode clang ships no
+  `libclang_rt.fuzzer_osx.a`. `run-tests.sh fuzz` detects the link failure and
+  falls back to an ASan/UBSan standalone driver (~19k iterations, no findings).
+  That proves the harness works; it is NOT coverage-guided fuzzing. On a machine
+  with full LLVM the same command gets the real engine, no code change.
+- `maxExternalAssets`/`maxExternalBytes` are enforced by the resolvers over the
+  asset directory, but not by the core — rlottie exposes no pre-parse API to
+  enumerate embedded assets.
+- File-backed cache keys remain location-derived (`rlottie::loadFromFile` takes
+  no key), so two different files at one path collide. Documented in
+  `cpp/CacheKey.h` and `src/source.ts`.
+
+Next: **Phase 6** (dynamic properties) and **Phase 7** (performance/stability).
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty

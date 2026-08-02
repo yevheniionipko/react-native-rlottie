@@ -29,11 +29,13 @@ export type NormalizeResult =
   | {ok: false; code: RlottieErrorCode; message: string};
 
 /**
- * URI schemes the native resolvers accept. `http`/`https` are deliberately NOT
- * here: remote loading is v1.1 (plan §3), gated behind `allowRemoteSources` in
- * Chunk 5.4, and the C++ core never performs network I/O (plan §16). They get a
- * dedicated message rather than the generic "unsupported scheme", because
- * "why doesn't a URL work" is the obvious first question.
+ * URI schemes the native resolvers accept unconditionally. `https:` is handled
+ * separately (see `normalizeUri`): it is gated behind `allowRemoteSources`
+ * rather than always rejected or always allowed. `http:` (no TLS) is never
+ * accepted, flag or no flag — plan §16 mandates HTTPS-only for remote content.
+ *
+ * These three get a dedicated message rather than the generic "unsupported
+ * scheme", because "why doesn't a URL work" is the obvious first question.
  */
 const ALLOWED_SCHEMES = ['file:', 'asset:', 'content:'] as const;
 
@@ -54,31 +56,52 @@ function fail(code: RlottieErrorCode, message: string): NormalizeResult {
 }
 
 /**
- * Derives the cache key.
+ * Derives the TS half of the cache key.
  *
  * Content-addressed for JSON sources: `sha256(json)` guarantees two different
  * payloads cannot collide regardless of what the caller passed as `cacheKey`.
  * The caller's key is appended (not substituted) so the same bytes under
  * different logical identities stay distinguishable.
  *
- * SCOPE — the full formula from plan §15 is
- *   `sha256(jsonBytes) : callerCacheKey : rlottieCommit : parseConfig`
- * and Chunk 5.3 owns completing it. The last two components are deliberately
- * NOT added here: `rlottieCommit` lives in `cpp/RlottieVersion.h` and only
- * reaches JS through the async `getNativeVersion()`, so including it would make
- * normalization async. They belong on the native side, which knows both
- * synchronously. Until then a cache entry does not survive an rlottie bump —
- * see the Chunk 5.3 note in CLAUDE.md.
+ * END-TO-END SCHEME (Chunk 5.3, plan §15) — this function produces only
+ * `sha256(jsonBytes):callerCacheKey`. That string is what crosses the bridge
+ * as `NormalizedRlottieSource.cacheKey`; native completes the formula by
+ * appending `:rlottieCommit:parseConfig` before the result reaches rlottie's
+ * own model cache. The split is a synchronicity constraint, not a temporary
+ * gap: `rlottieCommit` (`cpp/RlottieVersion.h`) and `parseConfig` are only
+ * knowable natively, and `normalizeSource` must stay synchronous (it runs
+ * during React render — see `RlottieView.tsx`), so it can never await a
+ * native round-trip to fold them in itself. Concretely:
+ *   - TS contributes: `sha256(jsonBytes) : callerCacheKey`  (this function)
+ *   - native appends: `: rlottieCommit : parseConfig`        (Chunk 5.3, native half)
+ * Do not change this `sha256(json):callerKey` format without updating the
+ * native composition in lockstep — `tests/js/source.test.js` pins it, and the
+ * native side is written against exactly this shape.
  */
 function cacheKeyForJson(json: string, callerKey: string | undefined): string {
   return `${sha256Hex(json)}:${callerKey ?? ''}`;
 }
 
 /**
- * For file-backed sources the content is not available in JS, so the key is the
- * location plus the caller's label. Chunk 5.3 should strengthen this natively
- * (size + mtime, or hashing the bytes it already reads) — two different files
- * successively at the same path currently produce the same key.
+ * For file-backed sources (`uri`/`path`) the content is not available in JS —
+ * reading the file synchronously on the JS thread to hash it would be its own
+ * performance bug, and doing it asynchronously would make `normalizeSource`
+ * async, which `RlottieView.tsx` requires it not be (see `cacheKeyForJson`).
+ * So the TS-knowable half of the key is the location plus the caller's label:
+ * `sha256(location):callerCacheKey`, mirroring the JSON scheme's shape so both
+ * kinds compose with native's `:rlottieCommit:parseConfig` suffix identically.
+ *
+ * KNOWN WEAKNESS, left for native (Chunk 5.3, native half): this key is
+ * location-derived, not content-derived, so two different files written
+ * successively to the same path produce the SAME key — unlike the JSON path,
+ * TS has no cheap way to detect that a `file://`/`content://` target changed
+ * underneath a stable path. Native is the only layer positioned to close this,
+ * because it already reads the file's bytes to parse it and can incorporate
+ * what it observes then (e.g. size + mtime, or hashing the bytes already in
+ * hand) into the part of the key it appends — no new native API is implied
+ * beyond what the resolver already does per read. Until native does that, a
+ * cache entry for a file-backed source does not invalidate when the file at
+ * that path changes without also changing `cacheKey` or the path itself.
  */
 function cacheKeyForLocation(
   location: string,
@@ -126,9 +149,23 @@ function normalizeJson(
   return {ok: true, source: normalized};
 }
 
+/**
+ * Chunk 5.4 — the remote-loading gate (stub).
+ *
+ * This function decides only whether a `source.uri` scheme is admissible; it
+ * never performs network I/O and never will from here (plan §12/§16 — the C++
+ * core is the layer that would eventually fetch, and even that is v1.1 scope).
+ * `allowRemoteSources` therefore changes REJECTION WORDING, not behavior: an
+ * `https://` uri is `INVALID_SOURCE` whether the flag is set or not, but the
+ * message differs so a developer who has already opted in isn't told their
+ * URL looks malformed when the real reason is "not implemented yet".
+ * `http://` is rejected unconditionally — plan §16 mandates HTTPS-only for any
+ * future remote loading, and that is not something a consumer can opt out of.
+ */
 function normalizeUri(
   uri: string,
   callerKey: string | undefined,
+  allowRemoteSources: boolean,
 ): NormalizeResult {
   const match = SCHEME_RE.exec(uri);
   if (!match) {
@@ -139,10 +176,22 @@ function normalizeUri(
   }
   const scheme = `${match[1].toLowerCase()}:`;
 
-  if (scheme === 'http:' || scheme === 'https:') {
+  if (scheme === 'http:') {
     return fail(
       'INVALID_SOURCE',
-      'remote sources are not supported in v1 — download the animation and pass a file:// uri',
+      'source.uri uses http:// — remote sources must use https:// (plain HTTP is never allowed, even with allowRemoteSources), and remote loading is not implemented yet in this version — download the animation and pass a file:// uri',
+    );
+  }
+  if (scheme === 'https:') {
+    if (!allowRemoteSources) {
+      return fail(
+        'INVALID_SOURCE',
+        'source.uri is a remote https:// url, which requires the allowRemoteSources prop — but remote loading is not implemented yet in this version even with it set; download the animation and pass a file:// uri',
+      );
+    }
+    return fail(
+      'INVALID_SOURCE',
+      'allowRemoteSources is set, but remote loading is not implemented yet in this version — the native layer never performs network I/O in v1 (v1.1 scope); download the animation and pass a file:// uri',
     );
   }
   if (!(ALLOWED_SCHEMES as readonly string[]).includes(scheme)) {
@@ -161,8 +210,17 @@ function normalizeUri(
  * Pure and synchronous. Object sources are memoized on identity, so calling
  * this on every render is cheap for a stable source and expensive only for a
  * caller who allocates a new object literal each time.
+ *
+ * `allowRemoteSources` (Chunk 5.4, default `false`) only affects the message
+ * on an `https://` `source.uri` — see `normalizeUri`. It does not change
+ * anything for `json`/`path` sources, and is intentionally NOT part of the
+ * memoization key for object `json` sources: those never reach the scheme
+ * check at all, so the flag cannot affect their result.
  */
-export function normalizeSource(source: RlottieSource): NormalizeResult {
+export function normalizeSource(
+  source: RlottieSource,
+  allowRemoteSources: boolean = false,
+): NormalizeResult {
   if (source === null || source === undefined) {
     return fail('INVALID_SOURCE', 'source is required');
   }
@@ -182,7 +240,7 @@ export function normalizeSource(source: RlottieSource): NormalizeResult {
         'could not resolve the required asset to a uri',
       );
     }
-    return normalizeUri(resolved.uri, undefined);
+    return normalizeUri(resolved.uri, undefined, allowRemoteSources);
   }
 
   if (typeof source !== 'object') {
@@ -217,7 +275,7 @@ export function normalizeSource(source: RlottieSource): NormalizeResult {
     if (typeof source.uri !== 'string' || source.uri.length === 0) {
       return fail('INVALID_SOURCE', 'source.uri must be a non-empty string');
     }
-    return normalizeUri(source.uri, source.cacheKey);
+    return normalizeUri(source.uri, source.cacheKey, allowRemoteSources);
   }
 
   if ('path' in source && source.path !== undefined) {

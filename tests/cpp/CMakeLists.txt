@@ -44,6 +44,10 @@ if(SAN_FLAGS)
 endif()
 
 file(GLOB TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+# fuzz_loadfromdata.cpp defines ONLY LLVMFuzzerTestOneInput (no main()) — it is
+# a separate libFuzzer binary (Chunk 5.5, target below), never part of the
+# CHECK/TEST binary built from TEST_SOURCES.
+list(FILTER TEST_SOURCES EXCLUDE REGEX "/fuzz_[^/]*\\.cpp$")
 
 add_executable(rnrlottie_tests
   ${TEST_SOURCES}
@@ -69,3 +73,23 @@ target_link_libraries(rnrlottie_tests PRIVATE rlottie::rlottie)
 
 enable_testing()
 add_test(NAME rnrlottie_tests COMMAND rnrlottie_tests)
+
+# --- Chunk 5.5: libFuzzer target over loadFromData/renderFrame ---------------
+#
+# -fsanitize=fuzzer needs Clang's fuzzer runtime; only offered there. Not added
+# to `add_test` / the default `ctest` run (that stays fast — see run-tests.sh);
+# invoke tests/run-tests.sh fuzz for a bounded smoke run, or run the binary
+# directly for a real campaign.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_executable(rnrlottie_fuzz_loadfromdata
+    fuzz_loadfromdata.cpp
+    ${REPO}/cpp/RlottiePlayerCore.cpp
+    ${REPO}/cpp/FrameBuffer.cpp
+  )
+  target_include_directories(rnrlottie_fuzz_loadfromdata PRIVATE ${REPO}/cpp)
+  set(FUZZ_FLAGS -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+      -fsanitize-ignorelist=${CMAKE_CURRENT_SOURCE_DIR}/rlottie-ubsan-ignorelist.txt)
+  target_compile_options(rnrlottie_fuzz_loadfromdata PRIVATE -Wall -Wextra ${FUZZ_FLAGS})
+  target_link_options(rnrlottie_fuzz_loadfromdata PRIVATE ${FUZZ_FLAGS})
+  target_link_libraries(rnrlottie_fuzz_loadfromdata PRIVATE rlottie::rlottie)
+endif()

@@ -129,6 +129,20 @@ export interface RlottieColorOverride {
 export interface RlottieViewProps extends ViewProps {
   source: RlottieSource;
 
+  /**
+   * Default `false`. Opt-in gate for a `source.uri` on `https://` (plan §16).
+   *
+   * v1 STUB (Chunk 5.4): this only changes which rejection message
+   * `normalizeSource` returns. Remote loading itself — the actual fetch — is
+   * v1.1 scope; the C++ core never performs network I/O (plan §12/§16), so
+   * setting this flag today does not make a remote source load. It exists now
+   * so the prop name and default are locked before the download path lands.
+   *
+   * `http://` (no TLS) is rejected regardless of this flag — HTTPS-only is
+   * non-negotiable (plan §16), not something a consumer can opt out of.
+   */
+  allowRemoteSources?: boolean;
+
   autoPlay?: boolean;
   loop?: boolean;
   /** With `loop`: 0 (default) is infinite; N > 0 is N extra plays. */

@@ -113,4 +113,13 @@ internal object RlottieBridge {
     @JvmStatic external fun nativeClearModelCache()
     @JvmStatic external fun nativeGetModelCacheSize(): Long
     @JvmStatic external fun nativeGetRlottieCommit(): String
+
+    /**
+     * Chunk 5.1 — the live `cpp/InputLimits.h` policy, as
+     * `[maxJsonBytes, maxExternalAssets, maxExternalBytes]`. [RlottieSourceResolver]
+     * reads this instead of hand-copying the C++ defaults into a Kotlin
+     * constant, so the two can no longer drift apart silently. No handle:
+     * global input-validation policy, not per-view state.
+     */
+    @JvmStatic external fun nativeGetInputLimits(): LongArray
 }

@@ -1,36 +1,24 @@
 // Chunk 1.3 — FrameBuffer implementation.
 #include "FrameBuffer.h"
 
-#include <limits>
 #include <new>
+
+#include "InputLimits.h"
 
 namespace rnrlottie {
 
 FrameBuffer::FrameBuffer(Limits limits) : limits_(limits) {}
 
 bool FrameBuffer::resize(Dimensions dims, PlayerError& outError) {
-    if (dims.width == 0 || dims.height == 0) {
-        outError = PlayerError{PlayerErrorCode::InvalidDimensions,
-                               "zero width or height", 0};
-        return false;
-    }
-    constexpr std::size_t kMaxAxis = std::numeric_limits<std::uint32_t>::max();
-    if (dims.width > kMaxAxis || dims.height > kMaxAxis) {
-        outError = PlayerError{PlayerErrorCode::InvalidDimensions,
-                               "dimension exceeds 32-bit range", 0};
-        return false;
-    }
-    if (dims.width > std::numeric_limits<std::size_t>::max() / dims.height) {
-        outError = PlayerError{PlayerErrorCode::InvalidDimensions,
-                               "pixel count overflow", 0};
+    // Chunk 5.1: overflow-checked bounds-validation is shared with the core's
+    // composition-size check (RlottiePlayerCore) via InputLimits::checkDimensions
+    // so the two call sites cannot drift apart on what "invalid" means.
+    const PlayerError dimErr = checkDimensions(dims.width, dims.height, limits_.maxPixels);
+    if (dimErr) {
+        outError = dimErr;
         return false;
     }
     const std::size_t pixels = dims.width * dims.height;
-    if (pixels > limits_.maxPixels) {
-        outError = PlayerError{PlayerErrorCode::InvalidDimensions,
-                               "pixel count exceeds configured maximum", 0};
-        return false;
-    }
 
     // Idempotent: equal dims reuse the existing allocation and keep the front.
     if (dims.width == dims_.width && dims.height == dims_.height &&

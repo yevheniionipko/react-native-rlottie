@@ -9,7 +9,20 @@
 #include <string>
 #include <vector>
 
+#include "InputLimits.h"
+
 namespace tst {
+
+// setInputLimits() (Chunk 5.1) is process-global state, and every test in this
+// binary runs serially in one process. Any test that calls setInputLimits()
+// MUST restore the previous value before returning, or it silently leaks into
+// every later-registered test regardless of source-file order. Construct one
+// of these at the top of such a test.
+struct ScopedInputLimits {
+    ScopedInputLimits() : prev(rnrlottie::currentInputLimits()) {}
+    ~ScopedInputLimits() { rnrlottie::setInputLimits(prev); }
+    rnrlottie::InputLimits prev;
+};
 
 using Fn = void (*)();
 

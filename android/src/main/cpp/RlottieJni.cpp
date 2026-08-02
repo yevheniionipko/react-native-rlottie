@@ -23,6 +23,7 @@
 #include "AndroidEventEncoding.h"
 #include "AndroidPixelConvert.h"
 #include "AnimationSource.h"
+#include "InputLimits.h"
 #include "JniPlayerHandle.h"
 #include "ModelCacheController.h"
 #include "PixelFormat.h"
@@ -312,6 +313,25 @@ JNIEXPORT jlong JNICALL Java_com_rlottie_RlottieBridge_nativeGetModelCacheSize(J
 JNIEXPORT jstring JNICALL Java_com_rlottie_RlottieBridge_nativeGetRlottieCommit(
     JNIEnv* env, jclass) {
     return env->NewStringUTF(rnrlottie::kRlottieCommit);
+}
+
+// Chunk 5.1/5.2 — the live cpp/InputLimits.h policy, for RlottieSourceResolver
+// (RlottieSourceResolver.kt) to enforce instead of hand-copied Kotlin
+// constants. Returns [maxJsonBytes, maxExternalAssets, maxExternalBytes] —
+// one call rather than three to keep the JNI surface narrow; extend the array
+// (never reorder existing entries) if a future chunk needs more fields.
+JNIEXPORT jlongArray JNICALL Java_com_rlottie_RlottieBridge_nativeGetInputLimits(
+    JNIEnv* env, jclass) {
+    const rnrlottie::InputLimits limits = rnrlottie::currentInputLimits();
+    jlongArray result = env->NewLongArray(3);
+    if (result == nullptr) return nullptr;
+    const jlong values[3] = {
+        static_cast<jlong>(limits.maxJsonBytes),
+        static_cast<jlong>(limits.maxExternalAssets),
+        static_cast<jlong>(limits.maxExternalBytes),
+    };
+    env->SetLongArrayRegion(result, 0, 3, values);
+    return result;
 }
 
 }  // extern "C"

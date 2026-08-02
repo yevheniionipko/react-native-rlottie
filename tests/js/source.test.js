@@ -181,6 +181,65 @@ for (const [label, input] of [
   );
 }
 
+// --- Remote loading gate (Chunk 5.4) -----------------------------------------
+// The gate changes REJECTION WORDING only — every case here still fails with
+// INVALID_SOURCE, flag or no flag, since v1 never performs network I/O.
+
+const httpsNoFlag = normalizeSource({uri: 'https://cdn.example.com/a.json'});
+const httpsWithFlag = normalizeSource(
+  {uri: 'https://cdn.example.com/a.json'},
+  true,
+);
+const httpNoFlag = normalizeSource({uri: 'http://cdn.example.com/a.json'});
+const httpWithFlag = normalizeSource(
+  {uri: 'http://cdn.example.com/a.json'},
+  true,
+);
+
+ok(
+  'https without allowRemoteSources is rejected',
+  httpsNoFlag.ok === false && httpsNoFlag.code === 'INVALID_SOURCE',
+);
+ok(
+  'https with allowRemoteSources is still rejected (not implemented, not malformed)',
+  httpsWithFlag.ok === false && httpsWithFlag.code === 'INVALID_SOURCE',
+);
+ok(
+  'http is rejected without allowRemoteSources',
+  httpNoFlag.ok === false && httpNoFlag.code === 'INVALID_SOURCE',
+);
+ok(
+  'http is rejected even WITH allowRemoteSources (HTTPS-only, plan §16)',
+  httpWithFlag.ok === false && httpWithFlag.code === 'INVALID_SOURCE',
+);
+
+// The messages must differ across states — a developer who has already opted
+// in should not be told their https URL "isn't supported"/looks malformed;
+// they should be told remote loading itself isn't implemented yet.
+ok(
+  'https message differs with vs. without the flag',
+  httpsNoFlag.message !== httpsWithFlag.message,
+);
+ok(
+  'https-without-flag message points at allowRemoteSources',
+  httpsNoFlag.message.includes('allowRemoteSources'),
+);
+ok(
+  'https-with-flag message says remote loading is not implemented, not that the url is invalid',
+  /not implemented/i.test(httpsWithFlag.message) &&
+    !/scheme/i.test(httpsWithFlag.message),
+);
+ok(
+  'http message (without flag) explains HTTPS-only, distinct from the https message',
+  httpNoFlag.message !== httpsNoFlag.message &&
+    /https/i.test(httpNoFlag.message),
+);
+ok(
+  'http message stays the same shape with the flag set (still HTTPS-only)',
+  httpWithFlag.message !== httpsWithFlag.message &&
+    /https/i.test(httpWithFlag.message),
+);
+
 // --- isSameNormalizedSource -------------------------------------------------
 
 ok(

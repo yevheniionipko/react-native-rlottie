@@ -16,6 +16,7 @@
 #include <string>
 
 #include "AnimationMetadata.h"
+#include "InputLimits.h"
 #include "PlayerError.h"
 
 namespace rlottie {
@@ -62,7 +63,10 @@ public:
     const PlayerError& lastError() const;
 
 private:
-    LoadResult finishLoad(std::unique_ptr<rlottie::Animation> anim);
+    // `limits` is the InputLimits snapshot (currentInputLimits(), Chunk 5.1)
+    // captured at the START of the load call, so a concurrent setInputLimits()
+    // cannot apply half-way through validating a single load.
+    LoadResult finishLoad(std::unique_ptr<rlottie::Animation> anim, const InputLimits& limits);
 
     std::unique_ptr<rlottie::Animation> animation_;  // owns; sole reference
     AnimationMetadata metadata_;
