@@ -40,10 +40,21 @@ Pod::Spec.new do |s|
     ss.source_files = "cpp/third_party/rlottie/src/**/*.{cpp,h}",
                       "cpp/third_party/rlottie/inc/*.h",
                       "cpp/third_party/rlottie_config/config.h"
-    # Exclude emscripten-only sources, the optional C API, and the 32-bit ASM.
+    # Exclude emscripten-only sources, the optional C API, the 32-bit ASM, and
+    # rapidjson's MSVC-only <stdint.h>/<inttypes.h> shims (vendored for
+    # pre-C99 MSVC only — each literally `#error`s under any other compiler).
+    # Chunk 8.1's example app is what caught this: `source_files` above is a
+    # recursive `**/*.h` glob, so it swept these headers in too, and Xcode's
+    # per-target header map (on by default) then made `#include <stdint.h>`
+    # resolve to msinttypes/stdint.h ahead of the real system header for the
+    # WHOLE target — poisoning every TU that includes <stdint.h>, not just
+    # rapidjson's own, and producing exactly that `#error` plus a cascade of
+    # redefinition errors. A plain command-line compile (Chunk 0.3's host
+    # probe) never exercises Xcode's header map, so it never surfaced this.
     ss.exclude_files = "cpp/third_party/rlottie/src/wasm/**/*",
                        "cpp/third_party/rlottie/src/binding/c/**/*",
-                       "cpp/third_party/rlottie/src/**/*.S"
+                       "cpp/third_party/rlottie/src/**/*.S",
+                       "cpp/third_party/rlottie/src/lottie/rapidjson/msinttypes/**/*"
     ss.preserve_paths = "cpp/third_party/rlottie/**/*"
     ss.compiler_flags = "-std=gnu++14 -fno-exceptions -fno-rtti -U__ARM_NEON__ -DNDEBUG -w"
     ss.pod_target_xcconfig = {

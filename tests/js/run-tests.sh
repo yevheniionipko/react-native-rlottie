@@ -34,3 +34,9 @@ echo "== running tests"
 node "$ROOT/tests/js/source.test.js"
 node "$ROOT/tests/js/commands.test.js"
 node "$ROOT/tests/js/module.test.js"
+# view.test.js renders RlottieView through react-test-renderer (Chunk 8.1). It
+# needs `react`/`react-test-renderer` resolvable, which they are from the repo's
+# own node_modules — and their versions must MATCH: react-test-renderer declares
+# a hard peer on the same React minor and crashes on load against a different
+# one (this was the reason the render path stayed untested through Phase 7).
+node "$ROOT/tests/js/view.test.js"

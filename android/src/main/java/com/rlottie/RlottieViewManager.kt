@@ -3,7 +3,6 @@ package com.rlottie
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
-import com.facebook.react.common.MapBuilder
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.annotations.ReactProp
@@ -387,19 +386,28 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     // `getCommandsMap()` supplies the name->id table the int-keyed path (and
     // some string-keyed paths that resolve through it) relies on.
 
-    override fun getCommandsMap(): MutableMap<String, Int> {
-        val builder = MapBuilder.builder<String, Int>()
-        builder.put("play", COMMAND_PLAY)
-        builder.put("pause", COMMAND_PAUSE)
-        builder.put("resume", COMMAND_RESUME)
-        builder.put("stop", COMMAND_STOP)
-        builder.put("reset", COMMAND_RESET)
-        builder.put("seekToProgress", COMMAND_SEEK_TO_PROGRESS)
-        builder.put("seekToFrame", COMMAND_SEEK_TO_FRAME)
-        builder.put("setSpeed", COMMAND_SET_SPEED)
-        builder.put("playMarker", COMMAND_PLAY_MARKER)
-        return builder.build()
-    }
+    // Deliberately NOT built with `com.facebook.react.common.MapBuilder`, which
+    // is the conventional helper here and was used originally. As of RN 0.81
+    // MapBuilder is itself Kotlin and its `build()` returns a READ-ONLY
+    // `kotlin.collections.Map<K, V>`, which cannot satisfy this override's
+    // `MutableMap<String, Int>` return type — a genuine compile error
+    // ("type mismatch"), not a style preference. It was invisible until Chunk
+    // 8.1 built the example app, because nothing before that compiled this
+    // module's Kotlin against a real React Native artifact. Copying into a
+    // HashMap would also work; building the mutable map directly avoids
+    // allocating two maps to return one.
+    override fun getCommandsMap(): MutableMap<String, Int> =
+        mutableMapOf(
+            "play" to COMMAND_PLAY,
+            "pause" to COMMAND_PAUSE,
+            "resume" to COMMAND_RESUME,
+            "stop" to COMMAND_STOP,
+            "reset" to COMMAND_RESET,
+            "seekToProgress" to COMMAND_SEEK_TO_PROGRESS,
+            "seekToFrame" to COMMAND_SEEK_TO_FRAME,
+            "setSpeed" to COMMAND_SET_SPEED,
+            "playMarker" to COMMAND_PLAY_MARKER,
+        )
 
     override fun receiveCommand(root: RlottieView, commandId: Int, args: ReadableArray?) {
         executeCommand(root, commandId, args)

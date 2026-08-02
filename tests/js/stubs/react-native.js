@@ -95,10 +95,13 @@ module.exports = {
   },
 
   requireNativeComponent(name) {
-    // src/RlottieNativeComponent.ts calls this at module-load time; return an
-    // opaque marker rather than a real host component, since no test renders
-    // through react-test-renderer here.
-    return {displayName: name};
+    // src/RlottieNativeComponent.ts calls this at module-load time. Returning
+    // the NAME STRING (not an opaque marker object) makes the result a valid
+    // host element type, which is what lets tests/js/view.test.js render
+    // RlottieView through react-test-renderer and read the props that actually
+    // cross the bridge via `findByType('RlottieView')`. Under a real renderer a
+    // host component is exactly this: a type identified by its name.
+    return name;
   },
 
   // Test-only escape hatches, not part of the real react-native surface.
