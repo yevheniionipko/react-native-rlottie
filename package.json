@@ -88,5 +88,28 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "codegenConfig": {
+    "name": "RNRlottieSpec",
+    "type": "all",
+    "jsSrcsDir": "src/specs",
+    "android": {
+      "javaPackageName": "com.rlottie.spec"
+    },
+    "ios": {
+      "componentProvider": {
+        "RlottieView": "RNRlottieComponentView"
+      },
+      "components": {
+        "RlottieView": {
+          "className": "RNRlottieComponentView"
+        }
+      },
+      "modules": {
+        "RlottieModule": {
+          "className": "RNRlottieModule"
+        }
+      }
+    }
   }
 }
