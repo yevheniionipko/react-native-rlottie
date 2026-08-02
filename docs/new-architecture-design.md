@@ -1812,6 +1812,99 @@ regenerated header, not against this document.
 | **Agent** | RNEngineer, with CPPArchitect/CPPEngineer reviewing the ownership and emitter-lifetime boundary |
 | **Risks** | Largest new-code chunk. The recycling and emitter-lifetime hazards are the ones that produce late, confusing bugs rather than immediate failures. |
 
+**Status: done, host-build-verified.** `ios/fabric/RNRlottieComponentView.h/.mm`
+implement §3.6 exactly, coded against the real generated headers (regenerated
+via `node node_modules/react-native/scripts/generate-codegen-artifacts.js -p .
+-t all -o /tmp/rnrl-cg8 -s library`, not assumed from this document's sketch):
+
+- `facebook::react::RlottieViewProps` (`Props.h`) has `RlottieViewSourceStruct`
+  with `json/uri/path/cacheKey/resourcePath` (`std::string`, no `operator==`
+  outside `RN_SERIALIZABLE_STATE`, confirming §3.2.1/§3.2.2 exactly), and the
+  three override structs `RlottieViewColorOverridesStruct` /
+  `...OpacityOverridesStruct` (`opacity: double`) /
+  `...StrokeWidthOverridesStruct` (`width: double`) as
+  `std::vector<...>` fields, same no-`operator==` shape.
+- `facebook::react::RlottieViewEventEmitter` (`EventEmitters.h`) declares
+  `onAnimationLoaded/onAnimationError/onAnimationStart/onAnimationPause/
+  onAnimationLoop/onAnimationFinish/onMetrics`, each taking a plain value
+  struct; the four lifecycle ones (`OnAnimationStart` etc.) are empty structs,
+  not `void` — call sites pass `{}`. `OnMetrics`'s eleven fields are all
+  `double`, matching Chunk 9.4's amendment.
+- `RCTRlottieViewViewProtocol` (`RCTComponentViewHelpers.h`) declares the nine
+  methods with **`setPlaybackSpeed:`**, not `setSpeed:`, confirming §3.3.
+  `RCTRlottieViewHandleCommand(componentView, commandName, args)` is the
+  dispatcher, called as-is from `-handleCommand:args:`.
+- `RlottieViewComponentDescriptor` (`ComponentDescriptors.h`) is
+  `ConcreteComponentDescriptor<RlottieViewShadowNode>` — used directly with no
+  custom descriptor/shadow-node/state.
+
+Implementation notes beyond what §3.6 already specifies:
+
+- The three override comparators and the `source` cacheKey comparator are
+  free functions at file scope (`RNRlottieSourceChanged`,
+  `RNRlottieColorOverridesChanged`, `RNRlottieOpacityOverridesChanged`,
+  `RNRlottieStrokeWidthOverridesChanged`), operating on the generated structs
+  directly — no `RN_SERIALIZABLE_STATE` dependency anywhere.
+- `source` is rebuilt into an `NSDictionary` (only the non-empty fields are
+  added) and handed to the existing `RNRlottieSourceResolver.resolveSource:
+  errorCode:errorMessage:`, exactly mirroring `RNRlottieViewManager.mm`'s
+  `RCT_CUSTOM_VIEW_PROPERTY(source, ...)` body; an all-empty struct (the
+  default on mount) produces an empty dictionary, which is treated as "no
+  source" (`_view.pendingSource = nil`), the same no-op Legacy already has for
+  a cleared `source`.
+- The hex-color parser is reimplemented as
+  `RNRlottieFabricParseHexColor(const std::string&, ...)` (the Manager's
+  version is `static` over `NSString*` and file-private) — same 6/8-digit
+  `#RRGGBB`/`#AARRGGBB` rule, alpha discarded, malformed entries skipped.
+- `-updateEventEmitter:` caches
+  `std::shared_ptr<const RlottieViewEventEmitter>` via
+  `std::static_pointer_cast`, cleared in `-prepareForRecycle`; every emitting
+  block null-checks it first. All seven blocks are assigned once, in
+  `-rnrlottie_createChildViewIfNeeded`, and read the same `NSDictionary`
+  payload shapes `RNRlottiePlayer.mm` already builds (verified key names:
+  `width/height/duration/frameRate/totalFrames/markers` with
+  `name/startFrame/endFrame` per marker; `code/message`; the eleven
+  `onMetrics` keys) — no change to `RNRlottiePlayer.mm` or `RNRlottieView.mm`
+  was needed to make the shapes line up.
+- `-updateLayoutMetrics:oldLayoutMetrics:` calls `super` then sets
+  `_view.frame = self.bounds`, doing no resize math itself — the child's own
+  `-layoutSubviews` → `scheduleSurfaceResizeForBounds:` debounce (100 ms,
+  `screen.scale`-based) fires unmodified, per §3.7.
+- `-finalizeUpdates:` calls `[_view didSetProps:@[]]` only when
+  `RNComponentViewUpdateMaskProps` is set in the mask, so a layout-only or
+  event-emitter-only commit does not re-run the coalesced `configure(...)`.
+
+Verified with a real build, not just by reading generated output: pointed
+`example/ios/Podfile` at `:fabric_enabled => true, :new_arch_enabled => true`,
+ran `pod install` (succeeded, "Configuring the target with the New
+Architecture", codegen ran and emitted `RlottieViewComponentDescriptor` etc.
+into `example/ios/build/generated/ios`), then
+
+```
+xcodebuild -workspace RlottieExample.xcworkspace -scheme RlottieExample \
+  -configuration Debug -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO
+```
+
+— **BUILD SUCCEEDED**, with `RNRlottieComponentView.o` present in DerivedData
+for both `arm64` and `x86_64`, each compiled with `-DRCT_NEW_ARCH_ENABLED=1`,
+and zero warnings or errors attributed to `RNRlottieComponentView.mm` in the
+build log. `git diff --stat ios/RNRlottieView.mm` is empty, confirming the
+acceptance criterion. The Podfile/Info.plist edits used to reach the
+new-architecture configuration were reverted afterward
+(`git checkout -- example/ios/Podfile example/ios/RlottieExample/Info.plist`)
+and `pod install` was re-run to restore the committed old-architecture Pods
+state; `git status --short` afterward shows only the new `ios/fabric/`
+directory as untracked.
+
+**Not verified here, left for Chunk 9.10's device pass**: no simulator/device
+run of the app, so the 13 props / 9 commands / 7 events were not exercised at
+runtime, no mount/unmount leak check, no resize-keeps-last-frame observation,
+and no background/foreground pause-resume check. This chunk's evidence is a
+successful, warning-free compile of the new Fabric adapter against the real
+generated headers under the real new-architecture Pod graph — not functional
+behavior.
+
 ### Chunk 9.9 — JS layer
 | | |
 |---|---|
