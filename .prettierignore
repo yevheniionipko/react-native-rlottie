@@ -1,0 +1,10 @@
+node_modules/
+lib/
+coverage/
+android/build/
+android/.gradle/
+ios/build/
+ios/Pods/
+cpp/third_party/
+example/
+*.pbxproj

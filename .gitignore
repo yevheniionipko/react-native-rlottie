@@ -1,0 +1,39 @@
+# Node / JS
+node_modules/
+lib/
+coverage/
+*.log
+npm-debug.*
+yarn-error.*
+.npm/
+
+# TypeScript
+*.tsbuildinfo
+
+# macOS
+.DS_Store
+
+# iOS / CocoaPods
+ios/build/
+ios/Pods/
+ios/*.xcworkspace
+Podfile.lock
+
+# Android / Gradle
+android/build/
+android/.gradle/
+android/.cxx/
+android/local.properties
+*.iml
+.idea/
+
+# Native build artifacts
+*.o
+*.a
+*.so
+*.dylib
+build/
+
+# Editor
+.vscode/
+*.swp

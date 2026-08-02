@@ -1,0 +1,7 @@
+node_modules/
+lib/
+example/
+cpp/
+ios/
+android/
+coverage/
