@@ -6,7 +6,10 @@ import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.UIManagerHelper
+import com.facebook.react.uimanager.ViewManagerDelegate
 import com.facebook.react.uimanager.annotations.ReactProp
+import com.facebook.react.viewmanagers.RlottieViewManagerDelegate
+import com.facebook.react.viewmanagers.RlottieViewManagerInterface
 import java.util.WeakHashMap
 
 /**
@@ -14,6 +17,14 @@ import java.util.WeakHashMap
  * (`docs/bridge-contract.md`), which this file must match byte-for-byte with
  * `ios/RNRlottieViewManager.mm`: prop names/defaults, the nine numeric
  * command ids, and the six direct-event names/payload shapes.
+ *
+ * Chunk 9.5 adds the Fabric side: this class also implements the codegen'd
+ * `RlottieViewManagerInterface` and hands `getDelegate()` a
+ * `RlottieViewManagerDelegate`, so the SAME setter/command methods now serve
+ * both architectures — see `docs/new-architecture-design.md` §3.3/§3.5 for
+ * why no `src/newarch`/`src/oldarch` split is needed here. `@ReactProp`
+ * annotations stay: Legacy's native view config is still reflected from them,
+ * independent of which delegate actually invokes the setter.
  *
  * This class is deliberately thin: it owns no playback logic, only
  * prop/command/event plumbing onto [RlottieView] (Chunk 3.2) and the
@@ -26,9 +37,10 @@ import java.util.WeakHashMap
  *
  * A `ViewManager` instance is a *singleton* shared by every `RlottieView` RN
  * mounts, so anything that varies per-instance (the coalesced playback
- * config, the `pauseWhenInactive` flag, the registered `LifecycleEventListener`)
- * cannot live in manager fields — it is keyed by view identity in
- * [viewStates], which is torn down per-view in [onDropViewInstance].
+ * config, the last-applied source/progress, `pauseWhenInactive`, the
+ * registered `LifecycleEventListener`) cannot live in manager fields — it is
+ * keyed by view identity in [viewStates], which is torn down per-view in
+ * [onDropViewInstance].
  *
  * ── Coalescing the playback-shaping props into one `configure()` call ────
  *
@@ -41,14 +53,37 @@ import java.util.WeakHashMap
  * — RN's "all `@ReactProp` setters for this transaction have now run" hook —
  * flushes exactly one `configure()` call per transaction, only if something
  * playback-shaping actually changed.
+ *
+ * ── The three Fabric change-guards (§3.5) ──────────────────────────────
+ *
+ * Under Fabric every setter runs on every commit with the COMPLETE prop set,
+ * not a diff. `setSource`, the playback-shaping setters, and `setProgress`
+ * each compare against a value stored in [ViewState] and no-op when nothing
+ * actually changed, so an unrelated style-only re-render can't re-resolve the
+ * source, re-anchor the playback clock, or re-seek. These guards are also
+ * correct and harmless under Legacy — RN only calls a setter there when the
+ * value changed, so the comparison always says "changed" — which is why they
+ * are unconditional rather than gated on architecture.
  */
-class RlottieViewManager : SimpleViewManager<RlottieView>() {
+class RlottieViewManager :
+    SimpleViewManager<RlottieView>(),
+    RlottieViewManagerInterface<RlottieView> {
 
     /** Per-view mutable state; entries are removed explicitly in [onDropViewInstance]. */
     private class ViewState {
         val config = PlaybackConfig()
         var pauseWhenInactive: Boolean = true
         var lifecycleListener: LifecycleEventListener? = null
+
+        // §3.5 guard #2 (progress): last value actually applied via seekToProgress
+        // from the `progress` prop. Starts at the prop's own documented default
+        // (0.0) so an initial `progress={0}` is indistinguishable from "never
+        // set" — see §3.2.4.
+        var lastProgress: Double = 0.0
+
+        // §3.5 guard #3 (source): last identity applied via setSource. Null on
+        // a fresh view so the very first setSource call always resolves.
+        var lastSource: SourceIdentity? = null
     }
 
     private class PlaybackConfig {
@@ -68,12 +103,30 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         var dirty: Boolean = true
     }
 
+    /**
+     * §3.2.1's comparison key for `source`: `cacheKey`/`path`/`uri`/`resourcePath`
+     * only — NEVER `json` (multi-megabyte; `cacheKey` is content-addressed, so
+     * equal `cacheKey` already implies equal `json`).
+     */
+    private data class SourceIdentity(
+        val cacheKey: String,
+        val path: String,
+        val uri: String,
+        val resourcePath: String,
+    )
+
     // Identity-keyed (RlottieView has no custom equals/hashCode), and weak so a
     // view that somehow skips onDropViewInstance can't pin state forever.
     private val viewStates = WeakHashMap<RlottieView, ViewState>()
 
     private fun stateFor(view: RlottieView): ViewState =
         viewStates.getOrPut(view) { ViewState() }
+
+    // --- Fabric delegate --------------------------------------------------------
+
+    private val delegate = RlottieViewManagerDelegate<RlottieView, RlottieViewManager>(this)
+
+    override fun getDelegate(): ViewManagerDelegate<RlottieView> = delegate
 
     // --- Identity -------------------------------------------------------------
 
@@ -158,12 +211,25 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     // security checks in plan §16) happens in RlottieSourceResolver (Chunk
     // 3.4) so the C++ core never sees a URI. This setter only dispatches on
     // the resolver's result.
+    //
+    // §3.5 guard #3: compared BEFORE resolving, so an unchanged source never
+    // reaches the resolver (no re-read, no content:// re-copy, no generation
+    // bump / restart). Per §3.2.1: an empty cacheKey on either side is treated
+    // as "changed" (conservative — matches today's "apply whatever arrives"
+    // behaviour for a hand-rolled caller with no cache key).
 
     @ReactProp(name = "source")
-    fun setSource(view: RlottieView, source: ReadableMap?) {
-        if (source == null) return
+    override fun setSource(view: RlottieView, value: ReadableMap?) {
+        if (value == null) return
 
-        when (val resolved = RlottieSourceResolver.resolve(view.context, source)) {
+        val state = stateFor(view)
+        val identity = sourceIdentity(value)
+        val last = state.lastSource
+        val changed = last == null || identity.cacheKey.isEmpty() || last.cacheKey.isEmpty() || identity != last
+        if (!changed) return
+        state.lastSource = identity
+
+        when (val resolved = RlottieSourceResolver.resolve(view.context, value)) {
             is RlottieResolvedSource.Data ->
                 view.setSourceData(resolved.json, resolved.cacheKey, resolved.resourcePath)
 
@@ -176,51 +242,69 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         }
     }
 
+    private fun sourceIdentity(source: ReadableMap): SourceIdentity = SourceIdentity(
+        cacheKey = stringOrNull(source, "cacheKey") ?: "",
+        path = stringOrNull(source, "path") ?: "",
+        uri = stringOrNull(source, "uri") ?: "",
+        resourcePath = stringOrNull(source, "resourcePath") ?: "",
+    )
+
     private fun stringOrNull(map: ReadableMap, key: String): String? {
         if (!map.hasKey(key) || map.isNull(key)) return null
         return map.getString(key)
     }
 
     // --- Props: playback-shaping (coalesced; see class doc) ---------------------
+    //
+    // §3.5 guard #1: each setter only marks [PlaybackConfig] dirty when the
+    // incoming value actually differs from the stored one, so a Fabric commit
+    // that re-sends an unchanged value never re-anchors the playback clock via
+    // [onAfterUpdateTransaction].
 
     @ReactProp(name = "loop", defaultBoolean = false)
-    fun setLoop(view: RlottieView, value: Boolean) {
+    override fun setLoop(view: RlottieView, value: Boolean) {
         val cfg = stateFor(view).config
+        if (cfg.loop == value) return
         cfg.loop = value
         cfg.dirty = true
     }
 
     @ReactProp(name = "repeatCount", defaultInt = 0)
-    fun setRepeatCount(view: RlottieView, value: Int) {
+    override fun setRepeatCount(view: RlottieView, value: Int) {
         val cfg = stateFor(view).config
+        if (cfg.repeatCount == value) return
         cfg.repeatCount = value
         cfg.dirty = true
     }
 
     @ReactProp(name = "speed", defaultDouble = 1.0)
-    fun setSpeed(view: RlottieView, value: Double) {
+    override fun setSpeed(view: RlottieView, value: Double) {
         val cfg = stateFor(view).config
+        if (cfg.speed == value) return
         cfg.speed = value
         cfg.dirty = true
     }
 
     @ReactProp(name = "startFrame", defaultInt = 0)
-    fun setStartFrame(view: RlottieView, value: Int) {
+    override fun setStartFrame(view: RlottieView, value: Int) {
         val cfg = stateFor(view).config
+        if (cfg.startFrame == value) return
         cfg.startFrame = value
         cfg.dirty = true
     }
 
     @ReactProp(name = "endFrame", defaultInt = 0)
-    fun setEndFrame(view: RlottieView, value: Int) {
+    override fun setEndFrame(view: RlottieView, value: Int) {
         val cfg = stateFor(view).config
+        if (cfg.endFrame == value) return
         cfg.endFrame = value
         cfg.dirty = true
     }
 
     @ReactProp(name = "autoPlay", defaultBoolean = false)
-    fun setAutoPlay(view: RlottieView, value: Boolean) {
+    override fun setAutoPlay(view: RlottieView, value: Boolean) {
         val cfg = stateFor(view).config
+        if (cfg.autoPlay == value) return
         cfg.autoPlay = value
         cfg.dirty = true
     }
@@ -242,16 +326,23 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
 
     // --- Props: seek / progress (applied immediately, not coalesced — these are
     // one-shot imperative-style seeks, not part of the persisted playback config) ---
+    //
+    // §3.5 guard #2: seeks only when `progress` actually changed from the last
+    // applied value, so a Fabric commit resending the same progress never
+    // fights in-flight playback.
 
     @ReactProp(name = "progress", defaultDouble = 0.0)
-    fun setProgress(view: RlottieView, value: Double) {
+    override fun setProgress(view: RlottieView, value: Double) {
+        val state = stateFor(view)
+        if (state.lastProgress == value) return
+        state.lastProgress = value
         view.seekToProgress(value)
     }
 
     // --- Props: rendering / misc -------------------------------------------------
 
     @ReactProp(name = "resizeMode")
-    fun setResizeMode(view: RlottieView, value: String?) {
+    override fun setResizeMode(view: RlottieView, value: String?) {
         // KNOWN GAP (flagged to the caller, not silently swallowed): RlottieView
         // (Chunk 3.2) always draws the current bitmap stretched to the exact
         // view bounds — it has no aspect-fit/fill/center hook, and the native
@@ -268,12 +359,12 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     }
 
     @ReactProp(name = "renderScale", defaultDouble = 1.0)
-    fun setRenderScale(view: RlottieView, value: Double) {
+    override fun setRenderScale(view: RlottieView, value: Double) {
         view.renderScale = value.toFloat()
     }
 
     @ReactProp(name = "pauseWhenInactive", defaultBoolean = true)
-    fun setPauseWhenInactive(view: RlottieView, value: Boolean) {
+    override fun setPauseWhenInactive(view: RlottieView, value: Boolean) {
         stateFor(view).pauseWhenInactive = value
     }
 
@@ -282,12 +373,12 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     // on/off has no ordering dependency on anything else in a prop
     // transaction.
     @ReactProp(name = "metricsEnabled", defaultBoolean = false)
-    fun setMetricsEnabled(view: RlottieView, value: Boolean) {
+    override fun setMetricsEnabled(view: RlottieView, value: Boolean) {
         view.metricsEnabled = value
     }
 
     @ReactProp(name = "cacheStrategy")
-    fun setCacheStrategy(view: RlottieView, value: String?) {
+    override fun setCacheStrategy(view: RlottieView, value: String?) {
         // KNOWN GAP, same shape as `resizeMode` above: neither RlottieBridge's
         // JNI surface (Chunk 3.1) nor RlottieView (Chunk 3.2) takes a cache
         // strategy anywhere — `setSourceData`/`setSourceFile` always pass
@@ -301,7 +392,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     }
 
     @ReactProp(name = "colorOverrides")
-    fun setColorOverrides(view: RlottieView, value: ReadableArray?) {
+    override fun setColorOverrides(view: RlottieView, value: ReadableArray?) {
         if (value == null) return
         for (i in 0 until value.size()) {
             val entry = value.getMap(i) ?: continue
@@ -345,7 +436,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     // handling exactly.
 
     @ReactProp(name = "opacityOverrides")
-    fun setOpacityOverrides(view: RlottieView, value: ReadableArray?) {
+    override fun setOpacityOverrides(view: RlottieView, value: ReadableArray?) {
         if (value == null) return
         for (i in 0 until value.size()) {
             val entry = value.getMap(i) ?: continue
@@ -356,7 +447,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
     }
 
     @ReactProp(name = "strokeWidthOverrides")
-    fun setStrokeWidthOverrides(view: RlottieView, value: ReadableArray?) {
+    override fun setStrokeWidthOverrides(view: RlottieView, value: ReadableArray?) {
         if (value == null) return
         for (i in 0 until value.size()) {
             val entry = value.getMap(i) ?: continue
@@ -379,13 +470,64 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         return if (v.isFinite()) v else null
     }
 
-    // --- Commands -----------------------------------------------------------------
+    // --- Commands: typed bodies (RlottieViewManagerInterface) --------------------
+    //
+    // These are the real, single bodies both `receiveCommand` overloads below
+    // route to — the Fabric delegate's generated `receiveCommand(view, String,
+    // args)` also calls these directly (see RlottieViewManagerDelegate.java).
+
+    override fun play(view: RlottieView, startFrame: Int, endFrame: Int) {
+        // startFrame/endFrame apply to THIS play only (-1 = unset) and are
+        // passed straight through to PlaybackController::play(optional,
+        // optional) — never written into the persistent PlaybackConfig, or a
+        // later argument-less play() would silently inherit the one-off range.
+        view.play(startFrame, endFrame)
+    }
+
+    override fun pause(view: RlottieView) {
+        view.pause()
+    }
+
+    override fun resume(view: RlottieView) {
+        view.resume()
+    }
+
+    override fun stop(view: RlottieView) {
+        view.stop()
+    }
+
+    override fun reset(view: RlottieView) {
+        view.reset()
+    }
+
+    override fun seekToProgress(view: RlottieView, progress: Double) {
+        view.seekToProgress(progress)
+    }
+
+    override fun seekToFrame(view: RlottieView, frame: Int) {
+        view.seekToFrame(frame)
+    }
+
+    override fun setPlaybackSpeed(view: RlottieView, speed: Double) {
+        view.setSpeed(speed)
+    }
+
+    override fun playMarker(view: RlottieView, name: String) {
+        // Return value intentionally ignored — an unknown marker is a silent
+        // no-op per docs/bridge-contract.md, not an error/event.
+        view.playMarker(name)
+    }
+
+    // --- Commands: Legacy numeric-id dispatch -------------------------------------
     //
     // RN's `dispatchViewManagerCommand` has shipped both int- and string-keyed
     // command ids across versions (plan §10); both overloads are implemented so
     // this library works regardless of which the host RN version uses.
     // `getCommandsMap()` supplies the name->id table the int-keyed path (and
-    // some string-keyed paths that resolve through it) relies on.
+    // some string-keyed paths that resolve through it) relies on. These ids are
+    // Legacy-only (docs/new-architecture-design.md §3.3): Fabric dispatches
+    // commands by name only, through the typed methods above via the generated
+    // delegate.
 
     // Deliberately NOT built with `com.facebook.react.common.MapBuilder`, which
     // is the conventional helper here and was used originally. As of RN 0.81
@@ -411,63 +553,57 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         )
 
     override fun receiveCommand(root: RlottieView, commandId: Int, args: ReadableArray?) {
-        executeCommand(root, commandId, args)
-    }
-
-    override fun receiveCommand(root: RlottieView, commandId: String, args: ReadableArray?) {
-        // Some RN versions pass the stringified numeric id here rather than
-        // the name registered in getCommandsMap(); accept either.
-        val id = commandId.toIntOrNull() ?: COMMANDS_BY_NAME[commandId]
-        if (id == null) return
-        executeCommand(root, id, args)
-    }
-
-    private fun executeCommand(view: RlottieView, commandId: Int, args: ReadableArray?) {
         // Commands that arrive before the view has a live native handle are
         // dropped silently (contract doc) — every RlottieView method below is
         // already a no-op guarded by `handle == 0L`, so nothing extra is
         // needed here for that case. Malformed/missing args are treated the
         // same way: dropped, not an error.
         when (commandId) {
-            COMMAND_PLAY -> executePlay(view, args)
-            COMMAND_PAUSE -> view.pause()
-            COMMAND_RESUME -> view.resume()
-            COMMAND_STOP -> view.stop()
-            COMMAND_RESET -> view.reset()
+            COMMAND_PLAY -> {
+                val start = args?.let { if (it.size() > 0) it.getInt(0) else NO_OVERRIDE } ?: NO_OVERRIDE
+                val end = args?.let { if (it.size() > 1) it.getInt(1) else NO_OVERRIDE } ?: NO_OVERRIDE
+                play(root, start, end)
+            }
+            COMMAND_PAUSE -> pause(root)
+            COMMAND_RESUME -> resume(root)
+            COMMAND_STOP -> stop(root)
+            COMMAND_RESET -> reset(root)
             COMMAND_SEEK_TO_PROGRESS -> {
                 val progress = args?.let { if (it.size() > 0) it.getDouble(0) else null } ?: return
-                view.seekToProgress(progress)
+                seekToProgress(root, progress)
             }
             COMMAND_SEEK_TO_FRAME -> {
                 val frame = args?.let { if (it.size() > 0) it.getInt(0) else null } ?: return
-                view.seekToFrame(frame)
+                seekToFrame(root, frame)
             }
             COMMAND_SET_SPEED -> {
                 val speed = args?.let { if (it.size() > 0) it.getDouble(0) else null } ?: return
-                view.setSpeed(speed)
+                setPlaybackSpeed(root, speed)
             }
             COMMAND_PLAY_MARKER -> {
                 val name = args?.let { if (it.size() > 0) it.getString(0) else null } ?: return
-                // Return value intentionally ignored — an unknown marker is a
-                // silent no-op per docs/bridge-contract.md, not an error/event.
-                view.playMarker(name)
+                playMarker(root, name)
             }
         }
     }
 
-    /**
-     * `play` takes `[startFrame: int | -1, endFrame: int | -1]`, where `-1`
-     * means "unset". The override applies to THIS play only and is passed
-     * straight through to `PlaybackController::play(optional, optional)` via
-     * `nativePlay` — it must NOT be written into the persistent [PlaybackConfig],
-     * or a later argument-less `play()` would silently inherit the one-off
-     * range. iOS routes the identical values through `-playFromFrame:toFrame:`,
-     * so both platforms land on the same core call.
-     */
-    private fun executePlay(view: RlottieView, args: ReadableArray?) {
-        val start = args?.let { if (it.size() > 0) it.getInt(0) else NO_OVERRIDE } ?: NO_OVERRIDE
-        val end = args?.let { if (it.size() > 1) it.getInt(1) else NO_OVERRIDE } ?: NO_OVERRIDE
-        view.play(start, end)
+    override fun receiveCommand(root: RlottieView, commandId: String, args: ReadableArray?) {
+        // Three accepted forms, in order:
+        //  1. a stringified numeric id (some RN versions send this);
+        //  2. a frozen Legacy command NAME from getCommandsMap() — notably
+        //     "setSpeed", which the generated delegate does NOT know because
+        //     the Fabric spec had to rename it to "setPlaybackSpeed" (§3.3).
+        //     Without this the JS name-dispatch fallback would silently drop
+        //     that one command on the Legacy path;
+        //  3. anything else -> the generated delegate, via super, which decodes
+        //     the Fabric names into the typed methods above. Not bypassed, so
+        //     the decode is not duplicated here.
+        val numericId = commandId.toIntOrNull() ?: getCommandsMap()[commandId]
+        if (numericId != null) {
+            receiveCommand(root, numericId, args)
+            return
+        }
+        super.receiveCommand(root, commandId, args)
     }
 
     private companion object {
@@ -482,18 +618,6 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         const val COMMAND_PLAY_MARKER = 9
 
         const val NO_OVERRIDE = -1
-
-        val COMMANDS_BY_NAME = mapOf(
-            "play" to COMMAND_PLAY,
-            "pause" to COMMAND_PAUSE,
-            "resume" to COMMAND_RESUME,
-            "stop" to COMMAND_STOP,
-            "reset" to COMMAND_RESET,
-            "seekToProgress" to COMMAND_SEEK_TO_PROGRESS,
-            "seekToFrame" to COMMAND_SEEK_TO_FRAME,
-            "setSpeed" to COMMAND_SET_SPEED,
-            "playMarker" to COMMAND_PLAY_MARKER,
-        )
 
         const val DEFAULT_RESIZE_MODE = "contain"
         val VALID_RESIZE_MODES = setOf("contain", "cover", "stretch", "center")

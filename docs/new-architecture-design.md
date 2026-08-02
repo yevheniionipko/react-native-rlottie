@@ -810,6 +810,24 @@ Scope and cost:
   interface. Any future command must be checked against that rule before being
   added.
 
+**The rename leaves one sharp edge on Android, and it must stay guarded.**
+`ViewManager.receiveCommand(view, String, args)` is not an empty default — it
+calls `getOrCreateViewManagerDelegate().receiveCommand(...)`
+(`.../uimanager/ViewManager.java:342-344`). Once `getDelegate()` returns the
+generated delegate (Chunk 9.5), a string-dispatched command therefore resolves
+against the **Fabric** name table, which contains `setPlaybackSpeed` and **not**
+`setSpeed`. But `src/commands.ts` deliberately falls back to dispatching by
+command NAME when it cannot resolve a numeric id, and on the Legacy path that
+name is `setSpeed`. Delegating straight to `super` would silently drop exactly
+that one command — no error, no log.
+
+`RlottieViewManager.receiveCommand(root, commandId: String, args)` therefore
+tries, in order: a stringified numeric id; then `getCommandsMap()[commandId]`
+(the frozen Legacy names, which is what recovers `setSpeed`); then `super`
+for the Fabric names. All three forms work, and the delegate still owns the
+Fabric decode rather than it being duplicated. Do not "simplify" this to a bare
+`super` call.
+
 ### iOS
 
 Codegen emits `RCTRlottieViewViewProtocol` with one method per command and an
@@ -1595,6 +1613,78 @@ for Chunk 9.10's device verification matrix.
 | **Acceptance** | Every prop, all nine commands, all seven events verified under Fabric. Explicitly: an unrelated style-only re-render does **not** re-resolve `source`, does **not** re-issue `configure()`, and does **not** seek — the §3.5 hazards. Playback timing under repeated commits matches Legacy. |
 | **Agent** | RNEngineer |
 | **Risks** | Highest-risk Android chunk. The change-guards are the whole game; without them the animation restarts on unrelated renders, which will look like "Fabric is broken" rather than "a guard is missing". |
+
+**Status: done, on-device confirmation deferred to Chunk 9.10.**
+`android/src/main/java/com/rlottie/RlottieViewManager.kt` now implements the
+generated `RlottieViewManagerInterface<RlottieView>` directly and returns a
+`RlottieViewManagerDelegate<RlottieView, RlottieViewManager>` from
+`getDelegate()`. Read from the real generated files
+(`android/build/generated/source/codegen/java/com/facebook/react/viewmanagers/`,
+via the real Gradle task, not the standalone script Chunk 9.1's note warns
+about) rather than assumed from this document: 16 prop setters and 9 command
+methods, matching §3.2.5/§3.3 exactly, including `setPlaybackSpeed` (not
+`setSpeed`) as the command name. `@ReactProp` annotations stay on every prop
+setter unchanged.
+
+The nine command methods (`play`, `pause`, `resume`, `stop`, `reset`,
+`seekToProgress`, `seekToFrame`, `setPlaybackSpeed`, `playMarker`) are now the
+single real bodies, each a thin forward onto the matching `RlottieView`
+method. `receiveCommand(root, commandId: Int, args)` maps the frozen Legacy
+ids 1–9 onto those same typed methods (no separate logic). `receiveCommand(root,
+commandId: String, args)` handles the stringified-numeric case via the same
+int-keyed path and otherwise calls `super.receiveCommand(...)`, so the
+generated delegate's own name-based decode is what runs — it is not
+duplicated here. Per §3.3's Android subsection, this means a hypothetical old
+RN version that dispatched the literal string `"setSpeed"` (rather than a
+stringified int or the modern `dispatchCommand` path) through this overload
+would no longer resolve, since the generated delegate's switch only knows
+`setPlaybackSpeed`; this is the documented, deliberate shape of this fallback
+per §3.3, not an oversight of this chunk.
+
+The three §3.5 change-guards are all in `ViewState` (a `WeakHashMap` keyed
+per-view, unchanged in shape from before this chunk):
+
+- **`source`**: a new `SourceIdentity(cacheKey, path, uri, resourcePath)` is
+  computed from the incoming `ReadableMap` and compared against
+  `ViewState.lastSource` *before* calling `RlottieSourceResolver.resolve(...)`
+  — an unchanged source never reaches the resolver at all. Per §3.2.1, an
+  empty `cacheKey` on either side forces "changed" conservatively; `json` is
+  never read for comparison.
+- **`configure()`**: each of the six playback-shaping setters (`loop`,
+  `repeatCount`, `speed`, `startFrame`, `endFrame`, `autoPlay`) now compares
+  against the stored `PlaybackConfig` field first and returns without setting
+  `dirty` when the value is unchanged. `PlaybackConfig.dirty` still starts
+  `true` unconditionally, so the very first `onAfterUpdateTransaction` after
+  mount still flushes one `configure()` call.
+- **`progress`**: `ViewState.lastProgress` (initialized to the prop's own
+  documented default, `0.0`) is compared before calling `seekToProgress`; an
+  unchanged value never seeks. Per §3.2.4 this makes an explicit
+  `progress={0}` on mount indistinguishable from "never set" — a documented,
+  not silent, behavioural note.
+
+All three guards are unconditional (not gated on architecture), per §3.5's
+closing point that they are harmless on Legacy since RN only calls a changed
+setter there.
+
+`RlottieView.kt` was not touched, per this chunk's scope.
+
+Verified: `scripts/check-android-build.sh --gradle` (real codegen +
+`assembleRelease`) passes — `compileReleaseKotlin` succeeds (one pre-existing
+deprecation warning on the `Int`-keyed `receiveCommand` override, present at
+`HEAD` before this chunk too, unrelated to this change) and the resulting AAR
+contains both ABIs' `.so`. `scripts/check-android-build.sh --link` passes
+unchanged (29 `Java_com_rlottie_*` symbols exported on all three ABIs — this
+chunk touched no C++/JNI).
+
+**Device-pending, per the chunk's own acceptance criterion.** The claim that
+an unrelated style-only re-render does not re-resolve `source`, re-issue
+`configure()`, or seek is, at this point, verified by code inspection only
+(the guard logic is straightforward equality checks against stored state, not
+verified by instrumenting a real Fabric commit). Proving it end-to-end —
+along with "all nine commands / seven events / every prop verified under
+Fabric" and "playback timing under repeated commits matches Legacy" — needs a
+running app on the new architecture, which is Chunk 9.10's device
+verification matrix. Do not treat this status note as that confirmation.
 
 ### Chunk 9.6 — iOS build integration
 | | |
