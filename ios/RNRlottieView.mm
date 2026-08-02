@@ -3,7 +3,9 @@
 
 #import <UIKit/UIKit.h>
 
+#include "ErrorCode.h"
 #include "InputLimits.h"
+#include "PlayerError.h"
 
 #import "RNRlottieFramePresenter.h"
 
@@ -96,6 +98,13 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
     BOOL _isPlayingIntent;       // tracks the player's own onStart/onPause/onFinish
     BOOL _pausedByLifecycle;     // we (not JS) paused it; safe for us to resume it
     BOOL _observersInstalled;
+
+    // Chunk 2.3: dirty flags for the -didSetProps: coalescing flush. Distinct
+    // from the property values themselves (which persist across flushes) so a
+    // prop transaction that touches neither group is a true no-op rather than
+    // re-issuing the same native call every batch.
+    BOOL _configureDirty;
+    BOOL _sourceDirty;
 }
 
 @synthesize player = _player;
@@ -107,6 +116,7 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
         _renderScale = 1.0;
         _presenter = [[RNRlottieFramePresenter alloc] init];
         _player = [[RNRlottiePlayer alloc] initWithMaxPixels:rnrlottie::InputLimits{}.maxPixels];
+        [self applyChunk23PropDefaults];
 
         self.layer.contentsScale = [UIScreen mainScreen].scale;
         // We manage layer.contents pixel-for-pixel ourselves; disable any
@@ -126,6 +136,7 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
         _renderScale = 1.0;
         _presenter = [[RNRlottieFramePresenter alloc] init];
         _player = [[RNRlottiePlayer alloc] initWithMaxPixels:rnrlottie::InputLimits{}.maxPixels];
+        [self applyChunk23PropDefaults];
         self.layer.contentsScale = [UIScreen mainScreen].scale;
         [self wirePlayerCallbacks];
         [self installAppLifecycleObserversIfNeeded];
@@ -375,6 +386,164 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
         _pausedByLifecycle = NO;
         [_player resume];
     }
+}
+
+#pragma mark - Chunk 2.3: prop defaults
+
+// Sets ivars directly (not via the setters below) to mirror how `_renderScale`
+// is initialized above — defaults shouldn't mark anything dirty or perform a
+// native call before the player/coordinator even has a source.
+- (void)applyChunk23PropDefaults {
+    _resizeMode = @"contain";
+    _pauseWhenInactive = YES;
+    _cacheStrategy = @"model";
+    _speed = 1.0;
+    // loop/repeatCount/startFrame/endFrame/autoPlay/progress default to their
+    // zero values (NO/0/0.0), which already match the contract's stated
+    // defaults, so nothing else to set here.
+}
+
+#pragma mark - Chunk 2.3: view-level props (resizeMode / progress)
+
+- (void)setResizeMode:(NSString *)resizeMode {
+    _resizeMode = [resizeMode copy] ?: @"contain";
+    NSString *gravity = kCAGravityResizeAspect;  // "contain" (default)
+    if ([_resizeMode isEqualToString:@"cover"]) {
+        gravity = kCAGravityResizeAspectFill;
+    } else if ([_resizeMode isEqualToString:@"stretch"]) {
+        gravity = kCAGravityResize;
+    } else if ([_resizeMode isEqualToString:@"center"]) {
+        gravity = kCAGravityCenter;
+    }
+    self.layer.contentsGravity = gravity;
+}
+
+- (void)setProgress:(double)progress {
+    _progress = progress;
+    // Not coalesced (docs/bridge-contract.md lists `progress` separately from
+    // the playback-shaping props) — an immediate seek, same as the
+    // `seekToProgress` imperative command.
+    [_player seekToProgress:progress];
+}
+
+#pragma mark - Chunk 2.3: playback-shaping coalescing
+
+// Contract: loop/repeatCount/speed/startFrame/endFrame/autoPlay must reach
+// the native `configure(...)` call ONCE per prop transaction, not once per
+// setter (RN applies RCT_EXPORT_VIEW_PROPERTY setters one at a time). Each
+// setter below only records the value + marks the view dirty; the single
+// -[RNRlottiePlayer configureLoop:...] call happens in -didSetProps: once ALL
+// of this transaction's setters have already run.
+
+- (void)setLoop:(BOOL)loop {
+    _loop = loop;
+    _configureDirty = YES;
+}
+
+- (void)setRepeatCount:(NSInteger)repeatCount {
+    _repeatCount = repeatCount;
+    _configureDirty = YES;
+}
+
+- (void)setSpeed:(double)speed {
+    _speed = speed;
+    _configureDirty = YES;
+}
+
+- (void)setStartFrame:(NSInteger)startFrame {
+    _startFrame = startFrame;
+    _configureDirty = YES;
+}
+
+- (void)setEndFrame:(NSInteger)endFrame {
+    _endFrame = endFrame;
+    _configureDirty = YES;
+}
+
+- (void)setAutoPlay:(BOOL)autoPlay {
+    _autoPlay = autoPlay;
+    _configureDirty = YES;
+}
+
+#pragma mark - Chunk 2.3: source (coalesced with cacheStrategy)
+
+- (void)setPendingSource:(NSDictionary *)pendingSource {
+    _pendingSource = [pendingSource copy];
+    _sourceDirty = YES;
+}
+
+// Interprets the already-resolved `source` shape (plan §12 / bridge-contract's
+// "Source resolution boundary"): only `{json,...}` and `{path}` are handled
+// here. Anything else — a `uri`, an http(s) URL, a require()'d asset id — is
+// out of scope for Chunk 2.2/2.3 and is the seam for Chunk 2.4's
+// RlottieSourceResolver; we surface it as `onAnimationError` /
+// `INVALID_SOURCE` instead of guessing.
+- (void)flushPendingSourceIfNeeded {
+    if (!_sourceDirty) {
+        return;
+    }
+    _sourceDirty = NO;
+    NSDictionary *source = _pendingSource;
+    if (!source) {
+        return;  // JS cleared `source`; nothing to apply at this layer.
+    }
+    const BOOL useModelCache = ![_cacheStrategy isEqualToString:@"none"];
+
+    NSString *json = source[@"json"];
+    if ([json isKindOfClass:[NSString class]] && json.length > 0) {
+        NSString *cacheKey = source[@"cacheKey"];
+        NSString *resourcePath = source[@"resourcePath"];
+        [_player setSourceData:json
+                       cacheKey:[cacheKey isKindOfClass:[NSString class]] ? cacheKey : @""
+                   resourcePath:[resourcePath isKindOfClass:[NSString class]] ? resourcePath : nil
+                  useModelCache:useModelCache];
+        return;
+    }
+
+    NSString *path = source[@"path"];
+    if ([path isKindOfClass:[NSString class]] && path.length > 0) {
+        [_player setSourceFile:path useModelCache:useModelCache];
+        return;
+    }
+
+    // --- Chunk 2.4 seam ---
+    // RlottieSourceResolver (bridge-contract.md "Source resolution boundary")
+    // will resolve `uri`/asset-id shapes into one of the two forms above
+    // *before* they ever reach this view. Until then, reject rather than
+    // silently no-op, using the same code string the C++ core would emit
+    // (cpp/ErrorCode.h) so this bridge-layer rejection is indistinguishable
+    // from a native one to JS.
+    if (self.onAnimationError) {
+        NSString *code = [NSString
+            stringWithUTF8String:rnrlottie::errorCodeString(rnrlottie::PlayerErrorCode::InvalidSource)];
+        self.onAnimationError(@{
+            @"code" : code,
+            @"message" : @"Unsupported `source` shape for this build; expected "
+                         @"{json,...} or {path} already resolved by the platform "
+                         @"source resolver.",
+        });
+    }
+}
+
+#pragma mark - Chunk 2.3: prop-transaction flush
+
+// RN's per-view "all RCT_EXPORT_VIEW_PROPERTY setters for this prop
+// transaction have now run" hook (RCTComponent.h / UIView+React.h), invoked
+// by RCTUIManager once per batch — see RCTUIManager.mm's
+// -_dispatchPropsDidChangeEvents, which calls this from inside an addUIBlock
+// (i.e. on MAIN, same thread as every setter above).
+- (void)didSetProps:(NSArray<NSString *> *)changedProps {
+    (void)changedProps;
+    if (_configureDirty) {
+        _configureDirty = NO;
+        [_player configureLoop:_loop
+                    repeatCount:(int)_repeatCount
+                          speed:_speed
+                     startFrame:_startFrame
+                       endFrame:_endFrame
+                       autoPlay:_autoPlay];
+    }
+    [self flushPendingSourceIfNeeded];
 }
 
 #pragma mark - Teardown

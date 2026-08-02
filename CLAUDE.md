@@ -51,14 +51,24 @@ physical pixels** (do not multiply by `density`), whereas **UIView bounds are
 points** (do multiply by `screenScale`). The plan's `dp * density` phrasing
 refers to the conversion Android has already done for you.
 
+**Chunks 2.3 and 3.3 are complete** — the bridge contract is now frozen in
+`docs/bridge-contract.md`, which is the authority for both platforms and for
+Phase 4. Read it before touching any prop, event, or command.
+`ios/RNRlottieViewManager.mm` and `android/.../RlottieViewManager.kt` +
+`RlottiePackage.kt` + `RlottieEvents.kt` implement it; verified identical on
+component name, the eight command ids, the six event names, and all 13 props.
+
 Known follow-ups (not defects in the above):
 
 - `android/build.gradle` has no `kotlin-android` plugin or Kotlin sourceSet, so
-  the Kotlin above is not yet part of the library build — **Chunk 3.5**.
-- `resizeMode`, `pauseWhenInactive`, and the rest of the plan §9 prop table have
-  no view-level plumbing yet on either platform — Chunks 2.3 / 3.3.
+  the Kotlin is not yet part of the library build — **Chunk 3.5**.
+- `resizeMode` and `cacheStrategy` are accepted and validated on both platforms
+  but are **no-ops on Android** (no draw-path / cache-flag hook yet) — 3.4/3.5.
+- `colorOverrides` discards alpha on both platforms (the core's `setColor` has
+  no alpha parameter).
 
-Next: Chunks 2.3/2.4 (iOS bridge) and 3.3–3.5 (Android bridge + Gradle).
+Next: Chunks 2.4/3.4 (global config module + source resolvers), 3.5 (Gradle),
+then Phase 4.
 
 ### Commands
 

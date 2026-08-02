@@ -67,7 +67,12 @@ internal object RlottieBridge {
 
     // --- Transport commands --------------------------------------------------
 
-    @JvmStatic external fun nativePlay(h: Long)
+    /**
+     * `startFrame`/`endFrame` are a ONE-OFF segment override for this play only;
+     * -1 means "unset". They do not mutate the persistent config set by
+     * [nativeConfigure] — see the comment on the C++ side in RlottieJni.cpp.
+     */
+    @JvmStatic external fun nativePlay(h: Long, startFrame: Int, endFrame: Int)
     @JvmStatic external fun nativePause(h: Long)
     @JvmStatic external fun nativeResume(h: Long)
     @JvmStatic external fun nativeStop(h: Long)

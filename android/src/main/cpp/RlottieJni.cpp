@@ -118,10 +118,28 @@ JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeConfigure(
     h->playback().configure(cfg);
 }
 
+// `startFrame`/`endFrame` are a ONE-OFF segment override for this play only
+// (plan §3's `play(options?)`); -1 means "unset", per docs/bridge-contract.md.
+// They deliberately do NOT mutate the persistent PlaybackConfig — a later
+// play() with no args must fall back to the configured range. This mirrors
+// iOS's -playFromFrame:toFrame:, and both delegate the actual semantics to
+// PlaybackController::play(optional, optional).
+//
+// The sentinel must be checked here: std::size_t cannot represent -1, and 0 is
+// a legitimate frame number, so a `> 0` truthiness test would be wrong.
 JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativePlay(JNIEnv*, jclass,
-                                                                jlong handle) {
+                                                                jlong handle,
+                                                                jint startFrame,
+                                                                jint endFrame) {
     auto* h = asHandle(handle);
-    if (h) h->playback().play(std::nullopt, std::nullopt);
+    if (h == nullptr) return;
+    const std::optional<std::size_t> sf =
+        startFrame >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(startFrame))
+                        : std::nullopt;
+    const std::optional<std::size_t> ef =
+        endFrame >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(endFrame))
+                      : std::nullopt;
+    h->playback().play(sf, ef);
 }
 
 JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativePause(JNIEnv*, jclass,

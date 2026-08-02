@@ -39,10 +39,13 @@ typedef void (^RNRlottieFrameBlock)(void);
 - (instancetype)init NS_UNAVAILABLE;
 
 // Source (already resolved by the platform resolver — raw JSON or a file path).
+// `useModelCache` threads the JS `cacheStrategy` prop ("model" -> YES, "none"
+// -> NO; Chunk 2.3) straight to rnrlottie::AnimationSource::useModelCache.
 - (void)setSourceData:(NSString *)json
              cacheKey:(NSString *)cacheKey
-         resourcePath:(nullable NSString *)resourcePath;
-- (void)setSourceFile:(NSString *)path;
+         resourcePath:(nullable NSString *)resourcePath
+        useModelCache:(BOOL)useModelCache;
+- (void)setSourceFile:(NSString *)path useModelCache:(BOOL)useModelCache;
 
 // Playback configuration. endFrame <= 0 means "last frame".
 - (void)configureLoop:(BOOL)loop
@@ -52,8 +55,10 @@ typedef void (^RNRlottieFrameBlock)(void);
              endFrame:(NSInteger)endFrame
              autoPlay:(BOOL)autoPlay;
 
-// Imperative commands.
-- (void)play;
+// Imperative commands. startFrame/endFrame follow the bridge contract's `play`
+// command args: -1 means "unset" (falls back to the configured start/end),
+// any value >= 0 is an explicit frame — see docs/bridge-contract.md.
+- (void)playFromFrame:(NSInteger)startFrame toFrame:(NSInteger)endFrame;
 - (void)pause;
 - (void)resume;
 - (void)stop;
@@ -61,6 +66,14 @@ typedef void (^RNRlottieFrameBlock)(void);
 - (void)seekToFrame:(NSInteger)frame;
 - (void)seekToProgress:(double)progress;
 - (void)setSpeed:(double)speed;
+
+// Overrides a fill color by Lottie key path (JS `colorOverrides` prop, Chunk
+// 2.3). Components are 0..1; no-op if the animation isn't loaded yet or the
+// key path doesn't resolve (rnrlottie::RenderCoordinator::setColor).
+- (void)setColorForKeyPath:(NSString *)keyPath
+                        red:(double)red
+                      green:(double)green
+                       blue:(double)blue;
 
 // Physical pixel dimensions of the render surface.
 - (void)setSurfaceWidth:(size_t)width height:(size_t)height;

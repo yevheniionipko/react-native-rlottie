@@ -183,9 +183,16 @@ class RlottieView @JvmOverloads constructor(
         RlottieBridge.nativeConfigure(h, loop, repeatCount, speed, startFrame, endFrame, autoPlay)
     }
 
-    fun play() {
+    /**
+     * [startFrame]/[endFrame] override the played segment for THIS play only
+     * (-1 = unset); they do not change the range configured via [configure].
+     * Mirrors iOS's `-playFromFrame:toFrame:` so both platforms behave
+     * identically for the contract's `play` command.
+     */
+    @JvmOverloads
+    fun play(startFrame: Int = NO_FRAME_OVERRIDE, endFrame: Int = NO_FRAME_OVERRIDE) {
         val h = handle
-        if (h != 0L) RlottieBridge.nativePlay(h)
+        if (h != 0L) RlottieBridge.nativePlay(h, startFrame, endFrame)
     }
 
     fun pause() {
@@ -504,6 +511,9 @@ class RlottieView @JvmOverloads constructor(
         // default. Chunk 3.4's config module can thread a smaller/larger
         // budget through the constructor once it exists.
         const val DEFAULT_MAX_PIXELS: Long = 4096L * 4096L
+
+        /** Sentinel for [play]'s optional segment override (docs/bridge-contract.md). */
+        const val NO_FRAME_OVERRIDE: Int = -1
 
         private const val RESIZE_DEBOUNCE_MS: Long = 80L
         private const val MIN_RENDER_SCALE = 0.05f

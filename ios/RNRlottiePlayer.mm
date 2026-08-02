@@ -158,7 +158,8 @@ NSString *ToNSString(const std::string &s) {
 
 - (void)setSourceData:(NSString *)json
              cacheKey:(NSString *)cacheKey
-         resourcePath:(NSString *)resourcePath {
+         resourcePath:(NSString *)resourcePath
+        useModelCache:(BOOL)useModelCache {
     if (_torndown || !_coordinator) {
         return;
     }
@@ -170,18 +171,18 @@ NSString *ToNSString(const std::string &s) {
     src.cacheKey = cacheKey ? std::string(cacheKey.UTF8String ?: "") : std::string();
     src.resourcePath =
         resourcePath ? std::string(resourcePath.UTF8String ?: "") : std::string();
-    src.useModelCache = true;
+    src.useModelCache = useModelCache;
     _coordinator->setSource(std::move(src));
 }
 
-- (void)setSourceFile:(NSString *)path {
+- (void)setSourceFile:(NSString *)path useModelCache:(BOOL)useModelCache {
     if (_torndown || !_coordinator) {
         return;
     }
     rnrlottie::AnimationSource src;
     src.kind = rnrlottie::AnimationSource::Kind::File;
     src.path = path ? std::string(path.UTF8String ?: "") : std::string();
-    src.useModelCache = true;
+    src.useModelCache = useModelCache;
     _coordinator->setSource(std::move(src));
 }
 
@@ -203,8 +204,17 @@ NSString *ToNSString(const std::string &s) {
     _playback.configure(cfg);
 }
 
-- (void)play {
-    _playback.play(std::nullopt, std::nullopt);
+- (void)playFromFrame:(NSInteger)startFrame toFrame:(NSInteger)endFrame {
+    // Contract: -1 means "unset" (docs/bridge-contract.md's `play` command).
+    // std::size_t can't represent negative values, so the sentinel check must
+    // happen here rather than via a `>0` truthiness check (0 is a valid frame).
+    const std::optional<std::size_t> sf =
+        startFrame >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(startFrame))
+                        : std::nullopt;
+    const std::optional<std::size_t> ef =
+        endFrame >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(endFrame))
+                      : std::nullopt;
+    _playback.play(sf, ef);
 }
 
 - (void)pause {
@@ -236,6 +246,19 @@ NSString *ToNSString(const std::string &s) {
 
 - (void)setSpeed:(double)speed {
     _playback.setSpeed(speed);
+}
+
+- (void)setColorForKeyPath:(NSString *)keyPath
+                        red:(double)red
+                      green:(double)green
+                       blue:(double)blue {
+    if (_torndown || !_coordinator || keyPath.length == 0) {
+        return;
+    }
+    _coordinator->setColor(std::string(keyPath.UTF8String ?: ""),
+                            static_cast<float>(red),
+                            static_cast<float>(green),
+                            static_cast<float>(blue));
 }
 
 - (void)setSurfaceWidth:(size_t)width height:(size_t)height {
