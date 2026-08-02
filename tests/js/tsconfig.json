@@ -1,0 +1,22 @@
+{
+  // Chunk 4.4 — build config for the JS logic tests.
+  //
+  // EXTENDS the real tsconfig rather than restating compiler flags on the tsc
+  // command line. A hand-maintained flag list drifted once already: without
+  // `strict` (hence without `strictNullChecks`), discriminated-union narrowing
+  // is weaker, so `normalizeSource`'s Result type failed to narrow and the test
+  // build broke on code that `npm run typecheck` accepted. Inheriting means the
+  // tests can only ever compile under the same rules as the package.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // Emit CommonJS into tests/js/out so plain node can require it.
+    "noEmit": false,
+    "declaration": false,
+    "outDir": "./out",
+    "rootDir": "../../src",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2017"
+  },
+  "include": ["../../src"]
+}

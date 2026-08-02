@@ -20,18 +20,9 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 echo "== compiling src/ -> $OUT"
-npx --no-install tsc \
-  "$ROOT/src/sha256.ts" \
-  "$ROOT/src/source.ts" \
-  "$ROOT/src/types.ts" \
-  "$ROOT/src/commands.ts" \
-  "$ROOT/src/RlottieNativeComponent.ts" \
-  --outDir "$OUT" \
-  --target ES2017 \
-  --module commonjs \
-  --lib ES2017,DOM \
-  --esModuleInterop \
-  --skipLibCheck
+# Uses tests/js/tsconfig.json, which EXTENDS the package tsconfig — see the
+# comment in that file for why the flags are not spelled out here.
+npx --no-install tsc --project "$ROOT/tests/js/tsconfig.json"
 
 # Resolve `require('react-native')` to the stub. A node_modules dir beside the
 # compiled output is the least magical way to do it (no loader hooks, no
@@ -42,3 +33,4 @@ cp "$ROOT/tests/js/stubs/react-native.js" "$OUT/node_modules/react-native.js"
 echo "== running tests"
 node "$ROOT/tests/js/source.test.js"
 node "$ROOT/tests/js/commands.test.js"
+node "$ROOT/tests/js/module.test.js"

@@ -132,14 +132,29 @@ Known follow-ups (not defects in the above):
   literals, so an identity guard would re-fire every render and any consumer
   setting state in that handler would spin.
 
-Not covered by tests: `RlottieView`'s render-time behaviour (the dedup and the
-stable-source-identity logic). Verifying it needs `react-test-renderer`, which
-would be a new devDependency — the reasoning is documented at each site instead.
+**Chunk 4.4 is complete — Phase 4 is done.** `src/RlottieModule.ts`,
+`src/index.ts`, `react-native.config.js`, and the `package.json` `exports` map.
 
-Next: Chunk 4.4 (`src/RlottieModule.ts`, `src/index.ts`, package exports).
-`RlottieView.tsx` exports both named and default; re-export the public types
-from `src/types.ts`. The module's three methods are Promise-based on BOTH
-platforms.
+- The native module is resolved lazily, per call. Throwing at import time would
+  take down any consumer that merely imports `RlottieView` without a native
+  runtime (a test file, storybook, a web build); failing at the call site keeps
+  the blast radius to code that actually needs native.
+- `src/index.ts` is the ONLY supported import path, and `exports` enforces it.
+  `dispatchRlottieCommand` is deliberately NOT exported — a hand-rolled dispatch
+  would bypass the unmounted-view guard and the id resolution that avoids the
+  iOS raw-index path. `RlottieCommand` is exported for reference only.
+
+Still not covered by tests: `RlottieView`'s render-time behaviour (the
+error-dedup and stable-source-identity logic). `react-test-renderer` is now in
+devDependencies but at **19.2.8, which cannot run against the pinned
+`react@18.2.0`** (it declares `peerDependencies: react ^19.2.8` and crashes on
+load reading React 19 internals). To close this gap, either pin
+`react-test-renderer@^18.2.0` or move `react`/`@types/react` to 19 — note RN
+0.81 itself expects React 19, so the devDependency pin at 18.2.0 is already out
+of step with `react-native@0.81.0`.
+
+Next: **Phase 5** (caching + source hardening). Chunk 5.3 completes the cache-key
+formula — see the scope notes in `src/source.ts`.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty

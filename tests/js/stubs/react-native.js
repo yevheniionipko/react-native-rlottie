@@ -36,6 +36,31 @@ const uiManagerMock = {
   },
 };
 
+// Records what src/RlottieModule.ts forwards to the native module. The three
+// methods are Promise-based on both platforms (docs/bridge-contract.md), so the
+// stub returns promises too — a stub that resolved synchronously would let a
+// missing `await` pass here and fail on a device.
+const nativeModuleCalls = [];
+
+const rlottieNativeModule = {
+  configure(options) {
+    nativeModuleCalls.push({method: 'configure', args: [options]});
+    return Promise.resolve();
+  },
+  clearModelCache() {
+    nativeModuleCalls.push({method: 'clearModelCache', args: []});
+    return Promise.resolve();
+  },
+  getNativeVersion() {
+    nativeModuleCalls.push({method: 'getNativeVersion', args: []});
+    return Promise.resolve({rlottieCommit: 'deadbeef', modelCacheSize: 10});
+  },
+};
+
+// Mutable so a test can simulate the "native module not linked" case, which is
+// the branch consumers hit when they forget `pod install` or skip a rebuild.
+const nativeModules = {RlottieModule: rlottieNativeModule};
+
 module.exports = {
   Image: {
     resolveAssetSource(id) {
@@ -46,6 +71,8 @@ module.exports = {
       return null;
     },
   },
+
+  NativeModules: nativeModules,
 
   UIManager: uiManagerMock,
 
@@ -77,4 +104,6 @@ module.exports = {
   // Test-only escape hatches, not part of the real react-native surface.
   __uiManagerMock: uiManagerMock,
   __dispatchedCalls: dispatchedCalls,
+  __nativeModuleCalls: nativeModuleCalls,
+  __nativeModules: nativeModules,
 };
