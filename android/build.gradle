@@ -1,18 +1,58 @@
+// Chunk 3.5 — the Android library build.
+//
+// Two consumption modes, and this file has to work in both:
+//   * Autolinked into an app (the normal case). The APP's buildscript supplies
+//     the Android Gradle Plugin and Kotlin plugin versions, and its
+//     `rootProject.ext` supplies compileSdk/minSdk/ndkVersion/etc — hence
+//     safeExtGet everywhere, so a consumer can pin versions without editing us.
+//   * Built standalone (CI / `scripts/check-android-build.sh`-style checks),
+//     where nothing is inherited and the fallbacks below are what actually run.
 buildscript {
+  // Inlined rather than routed through the safeExtGet() helper below:
+  // buildscript {} is evaluated before the rest of the script, so relying on a
+  // script-level def here is needlessly fragile.
+  ext.rlottieAgpVersion = rootProject.ext.has("androidGradlePluginVersion")
+      ? rootProject.ext.get("androidGradlePluginVersion") : "8.1.4"
+  ext.rlottieKotlinVersion = rootProject.ext.has("kotlinVersion")
+      ? rootProject.ext.get("kotlinVersion") : "1.9.24"
+
   repositories {
     google()
     mavenCentral()
   }
   dependencies {
-    classpath "com.android.tools.build:gradle:7.4.2"
+    classpath "com.android.tools.build:gradle:${rlottieAgpVersion}"
+    // Required: this module is Kotlin (Chunks 3.2-3.4). Without the Kotlin
+    // plugin every .kt file under src/main/java is silently ignored and the AAR
+    // ships the .so with no RlottieView/RlottieBridge classes at all — the
+    // library would fail at runtime with ClassNotFoundException, not at build
+    // time. This was the missing piece before Chunk 3.5.
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${rlottieKotlinVersion}"
   }
 }
 
 apply plugin: "com.android.library"
+apply plugin: "org.jetbrains.kotlin.android"
 
 def safeExtGet(prop, fallback) {
   rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
 }
+
+// Resolve the React Native version from the installed package rather than
+// hardcoding it. RN renamed its Maven artifact at 0.71 (react-native ->
+// react-android), so the coordinate depends on what the consumer actually has.
+// `reactNativeVersion` in the root project overrides the detection, for unusual
+// node_modules layouts (pnpm, custom hoisting) or a pinned CI build.
+def reactNativeVersion = safeExtGet("reactNativeVersion", null) ?: {
+  def pkg = file("${projectDir}/../node_modules/react-native/package.json")
+  if (!pkg.exists()) {
+    pkg = file("${projectDir}/../../react-native/package.json")  // hoisted install
+  }
+  if (pkg.exists()) {
+    return new groovy.json.JsonSlurper().parseText(pkg.text).version
+  }
+  return null
+}()
 
 android {
   namespace "com.rlottie"
@@ -27,9 +67,11 @@ android {
       cmake {
         cppFlags "-std=c++17"
         arguments "-DANDROID_STL=c++_shared"
-        // Minimal wiring (Chunk 0.3) targets arm64-v8a + x86_64. armeabi-v7a is
-        // opt-in: on 32-bit ARM, Apple/NDK clang defines __ARM_NEON__, which pulls
-        // in rlottie's 32-bit pixman NEON ASM path (kept optional per plan §14).
+        // arm64-v8a + x86_64 (device + emulator) are the defaults. armeabi-v7a
+        // is opt-in via `rlottieAbiFilters` and DOES link — see the
+        // -U__ARM_NEON__ note in src/main/cpp/CMakeLists.txt — but loses NEON
+        // acceleration, because rlottie's pixman NEON path is GNU-as syntax
+        // that the NDK's integrated assembler cannot build.
         abiFilters(*safeExtGet("rlottieAbiFilters", ["arm64-v8a", "x86_64"]))
       }
     }
@@ -42,8 +84,31 @@ android {
     }
   }
 
+  // RN 0.73+ builds on JDK 17; keep Java and Kotlin on the same target so the
+  // Kotlin classes and any Java in the AAR agree.
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
   buildFeatures {
     prefab false
+    buildConfig false
+  }
+
+  packagingOptions {
+    // libc++_shared.so ships with React Native already; a second copy in this
+    // AAR fails the app's merge step on a duplicate .so.
+    excludes += ["**/libc++_shared.so"]
+  }
+}
+
+// Kept as tasks.withType rather than the `kotlin { compilerOptions { } }` block:
+// the latter's typed JvmTarget DSL is Kotlin-plugin-version-sensitive, and this
+// module is compiled with whatever Kotlin version the consuming app pins.
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+  kotlinOptions {
+    jvmTarget = "17"
   }
 }
 
@@ -53,6 +118,11 @@ repositories {
 }
 
 dependencies {
-  //noinspection GradleDynamicVersion
-  implementation "com.facebook.react:react-native:+"
+  if (reactNativeVersion != null && !reactNativeVersion.startsWith("0.6")) {
+    // RN >= 0.71: published to Maven Central as com.facebook.react:react-android.
+    implementation "com.facebook.react:react-android:${reactNativeVersion}"
+  } else {
+    //noinspection GradleDynamicVersion
+    implementation "com.facebook.react:react-native:+"
+  }
 }

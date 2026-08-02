@@ -1,0 +1,25 @@
+/* Chunk 3.5 — the dynamic-symbol allow-list for libreact-native-rlottie.so.
+ *
+ * A JNI library only ever needs to expose its JNI entry points; everything else
+ * (the shared C++ core, and all of statically-linked rlottie) stays internal.
+ *
+ * This is not only hygiene. rlottie is linked statically INTO this .so, so
+ * without this script every `rlottie::*` symbol would also be globally visible
+ * and could interpose — or be interposed by — another native library in the
+ * same app that bundles its own copy of rlottie. Two rlottie builds resolving
+ * to each other's symbols is a very hard crash to diagnose.
+ *
+ * Keep `Java_com_rlottie_*` in sync with the class name in RlottieBridge.kt:
+ * renaming the Kotlin object changes the symbol prefix and would hide the lot.
+ *
+ * Every name listed here must actually be DEFINED: the NDK links with
+ * `--no-undefined-version --fatal-warnings`, so naming a symbol we don't
+ * implement (e.g. an unused JNI_OnUnload) is a hard link error, not a no-op.
+ */
+{
+global:
+    Java_com_rlottie_*;
+    JNI_OnLoad;
+local:
+    *;
+};

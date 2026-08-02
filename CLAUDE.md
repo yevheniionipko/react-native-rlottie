@@ -66,10 +66,29 @@ iOS has one, so both platforms accept and reject exactly the same sources. The
 bundled-asset scheme is `asset:///…` on **both** platforms (see the contract doc
 — each platform initially invented a different scheme).
 
-Known follow-ups (not defects in the above):
+**Chunk 3.5 is complete** — `android/build.gradle` now applies the Kotlin
+plugin (without it, every `.kt` file was silently excluded and the AAR would have
+shipped the `.so` with no classes), resolves the React Native artifact by reading
+the installed version (`react-android` at RN ≥ 0.71, `react-native` before), and
+excludes the duplicate `libc++_shared.so`. A standalone Gradle build produces a
+real AAR containing both ABIs' `.so` plus all 11 Kotlin classes.
 
-- `android/build.gradle` has no `kotlin-android` plugin or Kotlin sourceSet, so
-  the Kotlin is not yet part of the library build — **Chunk 3.5**.
+Two native faults that only a **real link** exposed — worth knowing before
+touching `src/main/cpp/CMakeLists.txt`:
+
+1. rlottie attaches its own linker version script (`rlottie.expmap`, ending in
+   `local: *;`) as a PRIVATE link item. rlottie is static here, and CMake
+   propagates a static lib's PRIVATE link items to consumers, so that script
+   landed on our `.so` and hid **every** JNI entry point — the library would load
+   and then fail at the first native call. We strip it from rlottie's interface
+   and apply our own `react-native-rlottie.expmap`.
+2. `armeabi-v7a` did not link at all: the NDK defines `__ARM_NEON__`, so rlottie
+   compiled `vdrawhelper_neon.cpp` while its pixman NEON `.S` was never
+   assembled. That `.S` is GNU-as syntax the NDK's integrated assembler rejects,
+   and NDK r28 has no GNU as — so we undefine `__ARM_NEON__` for rlottie on that
+   ABI (as the podspec already does on Apple arm64) and take the generic path.
+
+Known follow-ups (not defects in the above):
 - `resizeMode` and `cacheStrategy` are accepted and validated on both platforms
   but are **no-ops on Android** (no draw-path / cache-flag hook yet) — 3.4/3.5.
 - `colorOverrides` discards alpha on both platforms (the core's `setColor` has
@@ -82,8 +101,13 @@ Known follow-ups (not defects in the above):
   3.3 passed through unvalidated. Any fixture pointing outside
   `filesDir`/`cacheDir`/`noBackupFilesDir` now gets `INVALID_SOURCE`.
 
-Next: Chunks 2.4/3.4 (global config module + source resolvers), 3.5 (Gradle),
-then Phase 4.
+Next: **Phase 4** (the TypeScript API) — Phases 2 and 3 are complete. Chunk 4.1
+writes the TS types against `docs/bridge-contract.md`; note the error-union
+reconciliation flagged in `cpp/ErrorCode.h`.
+
+Not done, and out of reach in a headless environment: the plan's "example app
+runs on device + emulator" for Chunk 3.5. `example/` is still an empty
+placeholder — building it is Phase 4/5 work and needs a real device or emulator.
 
 ### Commands
 
@@ -98,10 +122,14 @@ npm run format:check     # prettier --check
 tests/run-tests.sh                 # all variants
 tests/run-tests.sh plain           # a single variant (plain|asan|tsan)
 
-# Type-check the JNI sources against the real NDK headers, per ABI.
-# (RlottieJni.cpp needs <jni.h>/<android/bitmap.h>, so run-tests.sh can't build
-#  it; the tests cover the JNI-free logic those entry points call.)
+# Android native build checks.
+# Syntax-only (fast): type-checks each JNI TU per ABI.
 scripts/check-android-build.sh [<api-level>]
+# Real link (slower, stronger): builds libreact-native-rlottie.so per ABI and
+# asserts the Java_com_rlottie_* symbols are actually EXPORTED. Use this before
+# trusting native changes — a syntax-only pass cannot see link or
+# symbol-visibility faults (see the Chunk 3.5 note below).
+scripts/check-android-build.sh --link [<api-level>]
 
 # Re-vendor / bump the pinned rlottie revision
 scripts/update-rlottie.sh [<commit-sha>]
