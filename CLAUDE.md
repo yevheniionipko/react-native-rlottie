@@ -15,8 +15,27 @@ Built and verified so far:
   `PlaybackController`, `RenderCoordinator` (+ `FrameSink`), `ModelCacheController`,
   and the value/limit headers.
 
-Next: Phase 2 (iOS) and Phase 3 (Android) — the platform adapters — which can
-proceed in parallel now that the core (through Chunk 1.5) exists.
+**Chunk 3.1 (Android JNI layer + handle safety) is complete**:
+`android/src/main/cpp/` — `RlottieJni.cpp` (the narrow JNI surface),
+`JniPlayerHandle` (the handle registry), `AndroidFrameSink` (poll-based),
+`AndroidPixelConvert.h`, `AndroidEventEncoding.h`.
+
+Two Android decisions worth knowing before touching that layer:
+
+- **Handles are registry ids, not pointers.** The `jlong` indexes a
+  mutex-guarded, never-reused id → owning-pointer map. A raw pointer + magic
+  sentinel was tried and rejected: validating the sentinel after destroy *is* a
+  use-after-free (ASan proves it), so it can't meet the "double handle calls
+  fail safe" criterion.
+- **The sink never calls into the JVM.** The render worker only records state;
+  the UI thread drains it each Choreographer tick
+  (`nativeHasNewFrame`/`nativeCopyFrontInto`/`nativePollEvent`). No `JavaVM`
+  attach on the worker, no weak-global-ref lifetime hazard. The trade-off vs
+  plan §3.1 is that the worker renders into the core's `FrameBuffer` and the UI
+  thread blits (one pass, channel swap fused) instead of rlottie rendering
+  directly into a locked Bitmap.
+
+Next: Phase 2 (iOS, in progress) and Chunks 3.2–3.5 (the Kotlin half of Android).
 
 ### Commands
 
@@ -30,6 +49,11 @@ npm run format:check     # prettier --check
 # Uses CMake+CTest when available; otherwise a direct clang fallback.
 tests/run-tests.sh                 # all variants
 tests/run-tests.sh plain           # a single variant (plain|asan|tsan)
+
+# Type-check the JNI sources against the real NDK headers, per ABI.
+# (RlottieJni.cpp needs <jni.h>/<android/bitmap.h>, so run-tests.sh can't build
+#  it; the tests cover the JNI-free logic those entry points call.)
+scripts/check-android-build.sh [<api-level>]
 
 # Re-vendor / bump the pinned rlottie revision
 scripts/update-rlottie.sh [<commit-sha>]

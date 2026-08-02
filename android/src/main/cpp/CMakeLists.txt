@@ -1,6 +1,6 @@
-# react-native-rlottie — Android native build (Chunk 0.3, minimal wiring).
-# Builds the shared library that links the vendored rlottie static lib. The full
-# JNI/core source set is added in Phase 1 (core) and Chunk 3.x (JNI).
+# react-native-rlottie — Android native build.
+# Builds the JNI shared library: the narrow JNI surface (Chunk 3.1) + the shared
+# C++ core (Phase 1) linked against the vendored rlottie static lib (Chunk 0.2).
 cmake_minimum_required(VERSION 3.18)
 project(react_native_rlottie LANGUAGES C CXX ASM)
 
@@ -27,17 +27,28 @@ add_subdirectory(
 )
 
 add_library(react-native-rlottie SHARED
-    ${RN_RLOTTIE_ROOT}/cpp/spike/probe.cpp
+    # JNI layer (Chunk 3.1)
+    ${CMAKE_CURRENT_SOURCE_DIR}/RlottieJni.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/JniPlayerHandle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/AndroidFrameSink.cpp
+    # Shared C++ core (Phase 1)
+    ${RN_RLOTTIE_ROOT}/cpp/RlottiePlayerCore.cpp
+    ${RN_RLOTTIE_ROOT}/cpp/FrameBuffer.cpp
+    ${RN_RLOTTIE_ROOT}/cpp/PlaybackController.cpp
+    ${RN_RLOTTIE_ROOT}/cpp/RenderCoordinator.cpp
+    ${RN_RLOTTIE_ROOT}/cpp/ModelCacheController.cpp
 )
 
 target_include_directories(react-native-rlottie PRIVATE
     ${RN_RLOTTIE_ROOT}/cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# jnigraphics is linked in Chunk 3.5 (Bitmap presenter); not needed for the probe.
+# jnigraphics provides AndroidBitmap_lockPixels for the front-buffer blit.
 target_link_libraries(react-native-rlottie
     PRIVATE
     rlottie::rlottie
     android
     log
+    jnigraphics
 )

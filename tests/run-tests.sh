@@ -47,6 +47,7 @@ INC=(
   -I"$ROOT/cpp/third_party/rlottie/src/lottie"
   -I"$ROOT/cpp/third_party/rlottie_config"
   -I"$ROOT/cpp"
+  -I"$ROOT/android/src/main/cpp"
   -I"$ROOT/tests/cpp"
 )
 
@@ -80,6 +81,8 @@ run_fallback() {
     "$ROOT"/cpp/RlottiePlayerCore.cpp "$ROOT"/cpp/FrameBuffer.cpp \
     "$ROOT"/cpp/PlaybackController.cpp "$ROOT"/cpp/RenderCoordinator.cpp \
     "$ROOT"/cpp/ModelCacheController.cpp \
+    "$ROOT"/android/src/main/cpp/JniPlayerHandle.cpp \
+    "$ROOT"/android/src/main/cpp/AndroidFrameSink.cpp \
     "$ROOT"/tests/cpp/*.cpp; do
     o="$bdir/$(basename "$src").o"
     "$CXX" -std=c++17 -Wall -Wextra -Werror ${san[@]+"${san[@]}"} "${INC[@]}" \

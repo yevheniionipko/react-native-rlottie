@@ -52,8 +52,16 @@ add_executable(rnrlottie_tests
   ${REPO}/cpp/PlaybackController.cpp
   ${REPO}/cpp/RenderCoordinator.cpp
   ${REPO}/cpp/ModelCacheController.cpp
+  # Chunk 3.1 — the JNI-free half of the Android adapter (handle safety, the
+  # poll-based sink, pixel conversion). RlottieJni.cpp needs the NDK and is
+  # compile-checked separately by scripts/check-android-build.sh.
+  ${REPO}/android/src/main/cpp/JniPlayerHandle.cpp
+  ${REPO}/android/src/main/cpp/AndroidFrameSink.cpp
 )
-target_include_directories(rnrlottie_tests PRIVATE ${REPO}/cpp)
+target_include_directories(rnrlottie_tests PRIVATE
+  ${REPO}/cpp
+  ${REPO}/android/src/main/cpp
+)
 target_compile_definitions(rnrlottie_tests PRIVATE RNRLOTTIE_TEST_DATA_DIR="${REPO}/tests")
 target_compile_options(rnrlottie_tests PRIVATE -Wall -Wextra ${SAN_FLAGS})
 target_link_options(rnrlottie_tests PRIVATE ${SAN_FLAGS})
