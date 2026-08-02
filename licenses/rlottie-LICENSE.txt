@@ -1,0 +1,34 @@
+rlottie — vendored at commit 2365f5671b67791fc179818fd11b180d79aec612
+Source: https://github.com/Samsung/rlottie.git
+
+======================================================================
+COPYING (licensing overview)
+======================================================================
+Licensing
+
+rlottie basically comes with MIT license(licenses/COPYING.MIT)
+but some parts of shared code are covered by different licenses. Listed
+below are the folder names and the license file covering it. Note that this
+license would cover all of the source invovled in each folders, unless
+specifically noted otherwise. So please refer to these imported project sources
+for details.
+
+Dependencies and licenses:
+
+src/vector/                    licenses/COPYING.MIT, COPYING.SKIA
+src/vector/freetype            licenses/COPYING.FTL
+src/vector/pixman              licenses/COPYING.PIX
+src/vector/stb                 licenses/COPYING.STB
+src/lottie/rapidjson           licenses/COPYING.RPD
+
+
+======================================================================
+licenses/COPYING.MIT (primary license)
+======================================================================
+Copyright 2020 (see AUTHORS)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
