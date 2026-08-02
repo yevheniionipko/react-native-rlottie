@@ -35,7 +35,30 @@ Two Android decisions worth knowing before touching that layer:
   thread blits (one pass, channel swap fused) instead of rlottie rendering
   directly into a locked Bitmap.
 
-Next: Phase 2 (iOS, in progress) and Chunks 3.2–3.5 (the Kotlin half of Android).
+**Chunks 2.1, 2.2, and 3.2 are complete** (uncommitted):
+
+- `ios/RNRlottiePlayer.h/.mm` (2.1) — the Obj-C++ adapter owning the coordinator.
+- `ios/RNRlottieView.h/.mm` + `ios/RNRlottieFramePresenter.h/.mm` (2.2) —
+  `CADisplayLink` via a weak `NSProxy` target, zero-copy `CGImage` over the
+  front buffer, debounced resize.
+- `android/src/main/java/com/rlottie/RlottieBridge.kt` + `RlottieView.kt` (3.2)
+  — `@JvmStatic external fun` bindings (a plain `external fun` on a Kotlin
+  `object` is an instance method and would NOT match the static JNI symbols),
+  Choreographer tick, two-Bitmap swap.
+
+Platform-specific trap worth remembering: **`View.getWidth()` is already
+physical pixels** (do not multiply by `density`), whereas **UIView bounds are
+points** (do multiply by `screenScale`). The plan's `dp * density` phrasing
+refers to the conversion Android has already done for you.
+
+Known follow-ups (not defects in the above):
+
+- `android/build.gradle` has no `kotlin-android` plugin or Kotlin sourceSet, so
+  the Kotlin above is not yet part of the library build — **Chunk 3.5**.
+- `resizeMode`, `pauseWhenInactive`, and the rest of the plan §9 prop table have
+  no view-level plumbing yet on either platform — Chunks 2.3 / 3.3.
+
+Next: Chunks 2.3/2.4 (iOS bridge) and 3.3–3.5 (Android bridge + Gradle).
 
 ### Commands
 
