@@ -24,9 +24,11 @@
 #include "AndroidPixelConvert.h"
 #include "AnimationSource.h"
 #include "JniPlayerHandle.h"
+#include "ModelCacheController.h"
 #include "PixelFormat.h"
 #include "PlaybackController.h"
 #include "PlayerError.h"
+#include "RlottieVersion.h"
 
 namespace {
 
@@ -278,6 +280,38 @@ JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeDestroy(JNIEnv*, jcl
                                                                    jlong handle) {
     // Idempotent; a zero/stale/already-destroyed handle is a no-op.
     rnrlottie::destroyPlayerHandle(static_cast<std::int64_t>(handle));
+}
+
+// --- Global / process-wide (Chunk 3.4) --------------------------------------
+//
+// Unlike everything above, these take no handle: ModelCacheController is
+// process-global state (rlottie's own LOTTIE_CACHE), internally serialized by
+// its own mutex (cpp/ModelCacheController.cpp), so no per-call handle
+// validation applies. Backs the global `RlottieModule` (RlottieModule.kt),
+// never per-view playback (plan §15 / docs/bridge-contract.md).
+
+JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeSetModelCacheSize(
+    JNIEnv*, jclass, jlong entries) {
+    const std::size_t size = entries > 0 ? static_cast<std::size_t>(entries) : 0;
+    rnrlottie::ModelCacheController::setModelCacheSize(size);
+}
+
+JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeClearModelCache(JNIEnv*,
+                                                                           jclass) {
+    rnrlottie::ModelCacheController::clearModelCache();
+}
+
+JNIEXPORT jlong JNICALL Java_com_rlottie_RlottieBridge_nativeGetModelCacheSize(JNIEnv*,
+                                                                              jclass) {
+    return static_cast<jlong>(rnrlottie::ModelCacheController::currentSize());
+}
+
+// kRlottieCommit is a compile-time literal (RlottieVersion.h); NewStringUTF
+// can only fail via a Java-level OOM, which is a normal JNI exception state
+// left for the JVM to handle — not a C++ exception crossing this boundary.
+JNIEXPORT jstring JNICALL Java_com_rlottie_RlottieBridge_nativeGetRlottieCommit(
+    JNIEnv* env, jclass) {
+    return env->NewStringUTF(rnrlottie::kRlottieCommit);
 }
 
 }  // extern "C"

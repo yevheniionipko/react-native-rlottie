@@ -8,6 +8,7 @@
 #include "PlayerError.h"
 
 #import "RNRlottieFramePresenter.h"
+#import "RNRlottieSourceResolver.h"
 
 // Physical-pixel per-axis clamp applied before the surface size ever reaches
 // the player. This is a cheap, early defensive bound (avoids handing the
@@ -487,6 +488,29 @@ static const NSTimeInterval kRNRlottieResizeDebounceInterval = 0.1;
     if (!source) {
         return;  // JS cleared `source`; nothing to apply at this layer.
     }
+
+    // Chunk 2.4: RNRlottieViewManager now resolves `source` through
+    // RNRlottieSourceResolver before it ever reaches -setPendingSource:. A
+    // resolver rejection is smuggled through under this reserved key (see
+    // RNRlottieSourceResolver.h) rather than a {json}/{path} shape — surface
+    // it verbatim as `onAnimationError` instead of falling through to the
+    // "unsupported shape" branch below.
+    NSDictionary *resolverError = source[RNRlottieSourceResolverErrorKey];
+    if ([resolverError isKindOfClass:[NSDictionary class]]) {
+        if (self.onAnimationError) {
+            NSString *code = resolverError[@"code"];
+            NSString *message = resolverError[@"message"];
+            self.onAnimationError(@{
+                @"code" : [code isKindOfClass:[NSString class]]
+                    ? code
+                    : [NSString stringWithUTF8String:rnrlottie::errorCodeString(
+                                                          rnrlottie::PlayerErrorCode::InvalidSource)],
+                @"message" : [message isKindOfClass:[NSString class]] ? message : @"",
+            });
+        }
+        return;
+    }
+
     const BOOL useModelCache = ![_cacheStrategy isEqualToString:@"none"];
 
     NSString *json = source[@"json"];

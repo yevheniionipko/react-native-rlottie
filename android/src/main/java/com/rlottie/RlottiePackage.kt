@@ -6,10 +6,10 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 /**
- * Chunk 3.3 — registers [RlottieViewManager] with RN's autolinking machinery.
- *
- * `createNativeModules` is empty for now: the global config / source-resolution
- * module (`RlottieModule`) is Chunk 3.4 and will be added here then.
+ * Chunk 3.3/3.4 — registers [RlottieViewManager] and [RlottieModule] with RN's
+ * autolinking machinery. [RlottieModule] (Chunk 3.4) is the process-global
+ * config module (`configure`/`clearModelCache`/`getNativeVersion`); it never
+ * routes per-view playback, which stays exclusively on [RlottieViewManager].
  */
 class RlottiePackage : ReactPackage {
 
@@ -17,5 +17,5 @@ class RlottiePackage : ReactPackage {
         mutableListOf(RlottieViewManager())
 
     override fun createNativeModules(reactContext: ReactApplicationContext): MutableList<NativeModule> =
-        mutableListOf()
+        mutableListOf(RlottieModule(reactContext))
 }

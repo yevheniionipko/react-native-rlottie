@@ -120,12 +120,74 @@ setter — otherwise a partially-applied config is briefly live.
 ## Source resolution boundary
 
 The C++ core never sees a URI and never performs I/O over the network (plan §12
-/ §16). At this layer, accept only an already-resolved shape:
+/ §16). The native layer accepts only an already-resolved shape:
 
 - `{json: "..."}` → `setSourceData(json, cacheKey, resourcePath)`
 - `{path: "/abs/app/private/path.json"}` → `setSourceFile(path)`
 
-Anything else (a `uri`, an `http(s)` URL, a require()'d asset id) is **out of
-scope for 2.3/3.3** — leave a clearly marked seam for `RlottieSourceResolver`
-(Chunk 3.4 / 2.4) and emit an `onAnimationError` with code `INVALID_SOURCE`
-rather than attempting resolution here.
+Chunks 2.3/3.3 implement only those two and emit `onAnimationError` /
+`INVALID_SOURCE` for anything else. **Chunks 2.4/3.4 own the resolver** that
+turns a JS source into one of them.
+
+### Resolver contract (Chunks 2.4 / 3.4)
+
+Both platforms must accept the same source kinds and reject the same ones. Plan
+§10's file list names `RlottieSourceResolver.kt` for Android and no iOS
+counterpart; that asymmetry is not intentional — iOS gets
+`ios/RNRlottieSourceResolver.h/.mm` so behaviour stays identical.
+
+v1 accepts, per plan §3:
+
+| input | resolves to |
+|-------|-------------|
+| `{json: "<raw json string>", cacheKey}` | `setSourceData` |
+| `{uri: "file:///…"}` | `setSourceFile` after canonicalization |
+| `{uri: "content://…"}` (Android) | copy into app-private storage → `setSourceFile` |
+| `{uri: "asset:///<relative/path>"}` | bundled asset → `setSourceFile` |
+
+**The bundled-asset scheme is `asset://` on BOTH platforms.** It resolves
+against Android's `assets/` root (via `AssetManager`, copied into app-private
+storage) and against `[[NSBundle mainBundle] bundlePath]` on iOS. The roots
+necessarily differ; the scheme deliberately does not, so a single JS `source`
+value works unchanged cross-platform. Use three slashes (`asset:///foo.json`) —
+an empty authority — matching RN's own convention for bundled non-image assets.
+This was left unspecified in the first draft and each platform independently
+invented a different scheme (`asset://` vs `bundle://`); they are now unified,
+and neither an alias nor a platform-conditional form should be reintroduced.
+
+v1 **rejects** with `INVALID_SOURCE` (v1.1 territory, plan §3): `http(s)://`
+remote URIs, `.lottie` containers, and any scheme not on the allow-list. Never
+silently fall back to a different source kind.
+
+Security rules (plan §16), binding on both resolvers:
+
+- Allow-list URI schemes; reject anything else rather than "best effort".
+- Canonicalize every path and **reject filesystem escape** — a `..` sequence, a
+  symlink out of the sandbox, or any resolved path outside the app-private
+  directory is `INVALID_SOURCE`, not a clamp.
+- Enforce the byte limit from `cpp/InputLimits.h` (`maxJsonBytes`, 16 MiB)
+  **before** reading a file fully into memory; oversize is `SOURCE_TOO_LARGE`.
+- A missing file is `SOURCE_NOT_FOUND`.
+- Never log raw animation JSON.
+- `resourcePath` (rlottie's external-asset root) must be a validated
+  app-private directory or empty — never a caller-supplied arbitrary root.
+
+Cache keys follow plan §15: derive from source identity **and** content, not a
+caller-supplied string alone, so two different payloads cannot silently share a
+key. The full `sha256(json) + ":" + callerCacheKey` scheme is Chunk 5.3; until
+then, include `kRlottieVersion`'s commit and do not trust a bare caller key.
+
+## Global module (Chunks 2.4 / 3.4)
+
+Native module name `RlottieModule`, exposing **only** process-global operations
+(plan §15) — never per-view playback:
+
+| method | behaviour |
+|--------|-----------|
+| `configure({modelCacheSize})` | → `ModelCacheController::setModelCacheSize` |
+| `clearModelCache()` | → `ModelCacheController::clearModelCache` |
+| `getNativeVersion()` | → `{rlottieCommit: kRlottieCommit, modelCacheSize: int}` |
+
+**All three are Promise-based on both platforms** — the TS wrapper `await`s them.
+Do not make any of them fire-and-forget on one platform only: that would give
+`await Rlottie.configure(...)` a platform-conditional error contract.

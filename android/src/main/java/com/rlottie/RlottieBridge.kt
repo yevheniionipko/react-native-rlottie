@@ -102,4 +102,15 @@ internal object RlottieBridge {
     // --- Dynamic properties ---------------------------------------------------
 
     @JvmStatic external fun nativeSetColor(h: Long, keyPath: String, r: Float, g: Float, b: Float)
+
+    // --- Global / process-wide (Chunk 3.4) -------------------------------------
+    //
+    // No handle: these back `ModelCacheController`, process-global rlottie
+    // model-cache state, never per-view playback (plan §15). Called only from
+    // [RlottieModule], not from [RlottieView].
+
+    @JvmStatic external fun nativeSetModelCacheSize(entries: Long)
+    @JvmStatic external fun nativeClearModelCache()
+    @JvmStatic external fun nativeGetModelCacheSize(): Long
+    @JvmStatic external fun nativeGetRlottieCommit(): String
 }

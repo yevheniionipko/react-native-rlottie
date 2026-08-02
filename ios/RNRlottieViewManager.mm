@@ -54,6 +54,7 @@
 #import <React/RCTViewManager.h>
 
 #import "RNRlottiePlayer.h"
+#import "RNRlottieSourceResolver.h"
 #import "RNRlottieView.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -130,14 +131,39 @@ RCT_EXPORT_VIEW_PROPERTY(cacheStrategy, NSString)
 
 // `source` needs conversion (it's a JS object, not a scalar/NSString), so it
 // is the one prop that goes through RCT_CUSTOM_VIEW_PROPERTY rather than
-// binding straight to a KVC setter. It still does no interpretation here —
-// it just hands the raw dictionary to RNRlottieView's `pendingSource`, whose
-// setter marks the view dirty; the actual {json}/{path}/INVALID_SOURCE
-// decision happens in -[RNRlottieView flushPendingSourceIfNeeded] (coalesced
-// with `cacheStrategy`, which may arrive before or after `source` in the same
-// transaction).
+// binding straight to a KVC setter. Chunk 2.4: the raw dictionary is run
+// through RNRlottieSourceResolver here (turning `{uri:...}` /
+// `{json,cacheKey}` / `{path}` into the {json,cacheKey,resourcePath}/{path}
+// shape RNRlottieView already understands, or rejecting it) before ever
+// reaching the view — RNRlottieView.h's "already resolved ... by
+// RNRlottieViewManager" contract. A resolver failure is smuggled through
+// `pendingSource` under RNRlottieSourceResolverErrorKey (see
+// RNRlottieSourceResolver.h); -[RNRlottieView flushPendingSourceIfNeeded]
+// checks that key first and emits `onAnimationError` with the embedded
+// {code, message} instead of trying to apply it as a source. Coalesced with
+// `cacheStrategy` exactly as before — this method still only stores a
+// pending value, it does not touch the player.
 RCT_CUSTOM_VIEW_PROPERTY(source, NSDictionary, RNRlottieView) {
-  view.pendingSource = json ? [RCTConvert NSDictionary:json] : nil;
+  NSDictionary *raw = json ? [RCTConvert NSDictionary:json] : nil;
+  if (!raw) {
+    view.pendingSource = nil;
+    return;
+  }
+  NSString *errorCode = nil;
+  NSString *errorMessage = nil;
+  NSDictionary *resolved = [RNRlottieSourceResolver resolveSource:raw
+                                                          errorCode:&errorCode
+                                                       errorMessage:&errorMessage];
+  if (resolved) {
+    view.pendingSource = resolved;
+  } else {
+    view.pendingSource = @{
+      RNRlottieSourceResolverErrorKey : @{
+        @"code" : errorCode ?: @"INVALID_SOURCE",
+        @"message" : errorMessage ?: @"",
+      },
+    };
+  }
 }
 
 // `colorOverrides`: `[{keyPath, color}]`. Applied immediately (not coalesced

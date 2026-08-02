@@ -152,39 +152,26 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
 
     // --- Props: source ----------------------------------------------------------
     //
-    // Only the already-resolved shapes from the contract doc are handled here.
-    // Everything else (uri / http(s) URL / require() asset id) is out of scope
-    // for 3.3 — SEAM for Chunk 3.4's RlottieSourceResolver — and gets
-    // `onAnimationError` with INVALID_SOURCE instead of silent failure or an
-    // attempted resolution.
+    // All resolution (bundled asset / file / content URI / raw JSON, plus the
+    // security checks in plan §16) happens in RlottieSourceResolver (Chunk
+    // 3.4) so the C++ core never sees a URI. This setter only dispatches on
+    // the resolver's result.
 
     @ReactProp(name = "source")
     fun setSource(view: RlottieView, source: ReadableMap?) {
         if (source == null) return
 
-        val json = stringOrNull(source, "json")
-        if (json != null) {
-            val cacheKey = stringOrNull(source, "cacheKey") ?: ""
-            val resourcePath = stringOrNull(source, "resourcePath")
-            view.setSourceData(json, cacheKey, resourcePath)
-            return
-        }
+        when (val resolved = RlottieSourceResolver.resolve(view.context, source)) {
+            is RlottieResolvedSource.Data ->
+                view.setSourceData(resolved.json, resolved.cacheKey, resolved.resourcePath)
 
-        val path = stringOrNull(source, "path")
-        if (path != null) {
-            view.setSourceFile(path)
-            return
-        }
+            is RlottieResolvedSource.File -> view.setSourceFile(resolved.path)
 
-        // TODO(Chunk 3.4): route through RlottieSourceResolver instead of
-        // erroring once bundled/asset/content-URI resolution exists.
-        view.onAnimationFailure?.invoke(
-            RlottiePlayerError(
-                code = "INVALID_SOURCE",
-                message = "Unsupported `source` shape; expected {json} or {path}. " +
-                    "URI/asset resolution is not implemented in this build.",
-            ),
-        )
+            is RlottieResolvedSource.Error ->
+                view.onAnimationFailure?.invoke(
+                    RlottiePlayerError(code = resolved.code, message = resolved.message),
+                )
+        }
     }
 
     private fun stringOrNull(map: ReadableMap, key: String): String? {

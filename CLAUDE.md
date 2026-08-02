@@ -58,6 +58,14 @@ Phase 4. Read it before touching any prop, event, or command.
 `RlottiePackage.kt` + `RlottieEvents.kt` implement it; verified identical on
 component name, the eight command ids, the six event names, and all 13 props.
 
+**Chunks 2.4 and 3.4 are complete** — the global `RlottieModule` (model-cache
+size, clear, native version; all Promise-based on both platforms) and the source
+resolvers: `ios/RNRlottieSourceResolver.h/.mm` + `android/.../RlottieSourceResolver.kt`.
+The plan's file list omits an iOS resolver; that asymmetry was unintentional and
+iOS has one, so both platforms accept and reject exactly the same sources. The
+bundled-asset scheme is `asset:///…` on **both** platforms (see the contract doc
+— each platform initially invented a different scheme).
+
 Known follow-ups (not defects in the above):
 
 - `android/build.gradle` has no `kotlin-android` plugin or Kotlin sourceSet, so
@@ -66,6 +74,13 @@ Known follow-ups (not defects in the above):
   but are **no-ops on Android** (no draw-path / cache-flag hook yet) — 3.4/3.5.
 - `colorOverrides` discards alpha on both platforms (the core's `setColor` has
   no alpha parameter).
+- `RlottieSourceResolver.kt` hardcodes the 16 MiB limit instead of reading
+  `cpp/InputLimits.h` (iOS includes the header directly). Chunk 5.1 makes the
+  limits configurable — wire Android to the real value then, or the two will
+  silently drift.
+- 3.4 now enforces app-private confinement on `{path}` and `resourcePath`, which
+  3.3 passed through unvalidated. Any fixture pointing outside
+  `filesDir`/`cacheDir`/`noBackupFilesDir` now gets `INVALID_SOURCE`.
 
 Next: Chunks 2.4/3.4 (global config module + source resolvers), 3.5 (Gradle),
 then Phase 4.
