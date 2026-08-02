@@ -230,12 +230,25 @@ that slows the thing it measures is worse than none.
 | `renderP50Ms`      | double | Render-duration percentiles over a bounded rolling window.      |
 | `renderP95Ms`      | double |                                                                 |
 | `renderP99Ms`      | double |                                                                 |
-| `framesRendered`   | int    | Frames actually rendered and published.                         |
-| `framesDropped`    | int    | Render requests coalesced away by latest-frame-wins.            |
-| `bufferAllocCount` | int    | FrameBuffer (re)allocations. Steady state MUST stop increasing. |
-| `peakBufferBytes`  | int    | High-water mark of buffer bytes held by this view.              |
-| `uiStallCount`     | int    | Display ticks that arrived later than expected.                 |
+| `framesRendered`   | double | Frames actually rendered and published.                         |
+| `framesDropped`    | double | Render requests coalesced away by latest-frame-wins.            |
+| `bufferAllocCount` | double | FrameBuffer (re)allocations. Steady state MUST stop increasing. |
+| `peakBufferBytes`  | double | High-water mark of buffer bytes held by this view.              |
+| `uiStallCount`     | double | Display ticks that arrived later than expected.                 |
 | `uiStallMaxMs`     | double | Worst observed tick gap.                                        |
+
+**Amendment (Chunk 9.4): these five fields were originally `int`, changed to
+`double`.** Android wrote them with `WritableMap.putInt` (32-bit, saturating)
+while iOS boxed the native `uint64_t` exactly — CLAUDE.md recorded this as a
+known cross-platform divergence, unreachable at default limits but real once
+`setInputLimits` raises `maxPixels` past 2^31. The Fabric spec generates one
+payload type from one spec for both platforms, so the divergence had to be
+resolved one way; `double` was chosen because a JS number is already a double
+(exact to 2^53), `Int32` would truncate on both platforms rather than just
+saturate on one, and `src/types.ts`'s `RlottieMetricsEvent` already types every
+field as `number`, so the public TS surface does not change. Android's
+`RlottieEvents.metricsPayload` now uses `putDouble` for all five; the change
+lands in the same chunk as the Fabric spec's `Double` declaration, not later.
 
 `peakBufferBytes` is **this view's frame buffers**, not process RSS — the plan's
 "peak native memory" is not knowable portably from inside the library, and

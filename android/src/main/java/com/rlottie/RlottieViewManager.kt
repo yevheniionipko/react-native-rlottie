@@ -5,8 +5,8 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.UIManagerHelper
 import com.facebook.react.uimanager.annotations.ReactProp
-import com.facebook.react.uimanager.events.RCTEventEmitter
 import java.util.WeakHashMap
 
 /**
@@ -123,8 +123,9 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
 
     private fun emit(view: RlottieView, name: String, payload: com.facebook.react.bridge.WritableMap) {
         val reactContext = view.context as? ThemedReactContext ?: return
-        val emitter = reactContext.getJSModule(RCTEventEmitter::class.java) ?: return
-        RlottieEvents.emit(emitter, view.id, name, payload)
+        val dispatcher = UIManagerHelper.getEventDispatcherForReactTag(reactContext, view.id) ?: return
+        val surfaceId = UIManagerHelper.getSurfaceId(view)
+        RlottieEvents.emit(dispatcher, surfaceId, view.id, name, payload)
     }
 
     override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> =

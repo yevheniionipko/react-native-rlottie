@@ -1495,6 +1495,46 @@ setters and 9 command methods with no duplicate erasure.
 | **Agent** | RNEngineer |
 | **Risks** | Silent event loss is the failure mode; only an explicit two-in-one-batch check catches it. |
 
+**Status: done.** `android/src/main/java/com/rlottie/RlottieEvent.kt` (new) is
+the one `Event<RlottieEvent>` subclass all seven events now dispatch through,
+with `canCoalesce()` hardcoded to `false` — the mandatory guard against
+`EventDispatcherImpl`'s `(viewTag, eventName, coalescingKey)` coalescing
+(§3.4.3, ranked risk #3). `RlottieEvents.kt`'s `emit` now takes an
+`EventDispatcher` (resolved via `UIManagerHelper.getEventDispatcherForReactTag`)
+and a `surfaceId` (via `UIManagerHelper.getSurfaceId(view)`, which the doc's
+§1's floor version — 0.76 — guarantees resolves correctly on both
+architectures) instead of an `RCTEventEmitter`; `RlottieViewManager.kt`'s
+private `emit` helper is the only call-site change there.
+`getExportedCustomDirectEventTypeConstants` now registers both the `onX` and
+`topX` keys per event, each with `registrationName = "onX"`, and
+`RlottieEvents.emit` always dispatches the `topX` form via a new `topName()`
+helper — exactly the §3.4.3 shape. `RlottieView.kt`'s `RlottieMetricsInfo`
+counters (`framesRendered`, `framesDropped`, `bufferAllocCount`,
+`peakBufferBytes`, `uiStallCount`) are now `Double`; the `coerceAtMostInt()`
+saturating-clamp helper is deleted since a `Double` payload has no overflow to
+guard against. Per §4's file table this is the file's only change — the
+Choreographer tick, poll/drain/present sequence, two-Bitmap swap, and
+`handle != 0L` guards are untouched. `docs/bridge-contract.md`'s Phase 7 field
+table is amended in this same commit (`int` → `double` for the five counters,
+with a note recording why).
+
+Verified: `scripts/check-android-build.sh --gradle` (real codegen +
+`assembleRelease`) and `scripts/check-android-build.sh --link` both pass;
+inspecting the resulting AAR's `classes.jar` confirms `RlottieEvent.class` and
+`RlottieEvents.class` are present and compiled clean against the real RN
+Gradle plugin and `UIManagerHelper`/`EventDispatcher` APIs (no reflection, no
+stub).
+
+**Device-pending, per the chunk's own acceptance criterion**: the two-events-
+in-one-batch coalescing proof needs a running app dispatching a real batch of
+events and observing both arrive in JS — that cannot be done from a standalone
+Gradle build. `canCoalesce() = false` is in place and is, per `Event.kt:88`, a
+hard "never coalesce" rather than a tunable default, so the mechanism is sound
+by inspection of RN's own `EventDispatcherImpl` coalescing predicate
+(`(viewTag, eventName, coalescingKey)` — `canCoalesce() = false` short-circuits
+that check regardless of key), but the on-device confirmation itself is left
+for Chunk 9.10's device verification matrix.
+
 ### Chunk 9.5 — Android Fabric component
 | | |
 |---|---|

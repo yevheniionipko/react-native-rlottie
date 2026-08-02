@@ -484,11 +484,11 @@ class RlottieView @JvmOverloads constructor(
                 renderP50Ms = snapshot[2],
                 renderP95Ms = snapshot[3],
                 renderP99Ms = snapshot[4],
-                framesRendered = snapshot[5].toLong().coerceAtMostInt(),
-                framesDropped = snapshot[6].toLong().coerceAtMostInt(),
-                bufferAllocCount = snapshot[7].toLong().coerceAtMostInt(),
-                peakBufferBytes = snapshot[8].toLong().coerceAtMostInt(),
-                uiStallCount = uiStallCount,
+                framesRendered = snapshot[5],
+                framesDropped = snapshot[6],
+                bufferAllocCount = snapshot[7],
+                peakBufferBytes = snapshot[8],
+                uiStallCount = uiStallCount.toDouble(),
                 uiStallMaxMs = uiStallMaxMs,
             ),
         )
@@ -684,14 +684,6 @@ class RlottieView @JvmOverloads constructor(
     }
 }
 
-/**
- * Clamps to [Int.MAX_VALUE] rather than truncating/wrapping — used for the
- * `MetricsSnapshot` counters, which are `uint64_t` natively but exposed to JS
- * as plain numbers (contract table: "int"); values this large are not
- * expected in practice, but a saturating clamp is safer than silent overflow.
- */
-private fun Long.coerceAtMostInt(): Int = coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-
 /** A named frame segment from the Lottie source (marker names are pre-sanitized natively). */
 data class RlottieMarker(val name: String, val startFrame: Int, val endFrame: Int)
 
@@ -709,9 +701,10 @@ data class RlottieLoadedInfo(
 data class RlottiePlayerError(val code: String, val message: String)
 
 /**
- * Phase 7 addition. Mirrors `docs/bridge-contract.md`'s "Phase 7 additions"
- * field table byte-for-byte (same field names/types on iOS). The first nine
- * fields come from `rlottie::MetricsSnapshot` (cpp/Metrics.h) via
+ * Mirrors `docs/bridge-contract.md`'s "Phase 7 additions" field table
+ * byte-for-byte (same field names/types on iOS). The five counters are `Double`,
+ * not `Int`; see that table's amendment note. The first nine fields come from
+ * `rlottie::MetricsSnapshot` (cpp/Metrics.h) via
  * [RlottieBridge.nativeGetMetricsSnapshot]; the last two ([uiStallCount],
  * [uiStallMaxMs]) are measured here on the UI thread, since only the UI
  * thread can observe its own Choreographer stalls.
@@ -722,10 +715,10 @@ data class RlottieMetricsInfo(
     val renderP50Ms: Double,
     val renderP95Ms: Double,
     val renderP99Ms: Double,
-    val framesRendered: Int,
-    val framesDropped: Int,
-    val bufferAllocCount: Int,
-    val peakBufferBytes: Int,
-    val uiStallCount: Int,
+    val framesRendered: Double,
+    val framesDropped: Double,
+    val bufferAllocCount: Double,
+    val peakBufferBytes: Double,
+    val uiStallCount: Double,
     val uiStallMaxMs: Double,
 )
