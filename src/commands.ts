@@ -13,6 +13,7 @@ import type {Component} from 'react';
 import {UIManager, findNodeHandle} from 'react-native';
 
 import {RLOTTIE_COMPONENT_NAME} from './RlottieNativeComponent';
+import {Commands as RlottieViewCommands} from './specs/RlottieViewNativeComponent';
 
 /**
  * Stable numeric ids from `docs/bridge-contract.md`. Never renumber: released
@@ -62,6 +63,70 @@ export const RLOTTIE_COMMAND_IDS: Record<RlottieCommandName, RlottieCommand> = {
 
 /** Anything with a native tag — what `useRef` on the host component yields. */
 export type RlottieViewHandle = Component | number | null | undefined;
+
+/**
+ * Maps the frozen public/Legacy command name to its Fabric `Commands` key.
+ * `setSpeed` is the one renamed entry — Android's generated view-manager
+ * interface merges prop setters and command methods into one class, and a
+ * `setSpeed` command collides with the `speed` prop's generated setter (same
+ * erasure). See docs/new-architecture-design.md §3.3, "The one Fabric command
+ * that is NOT named after its public API". Every other name is identity.
+ */
+const NEW_ARCH_COMMAND_NAMES: Record<
+  RlottieCommandName,
+  keyof typeof RlottieViewCommands
+> = {
+  play: 'play',
+  pause: 'pause',
+  resume: 'resume',
+  stop: 'stop',
+  reset: 'reset',
+  seekToProgress: 'seekToProgress',
+  seekToFrame: 'seekToFrame',
+  setSpeed: 'setPlaybackSpeed',
+  playMarker: 'playMarker',
+};
+
+/**
+ * `global.nativeFabricUIManager` is set precisely when Fabric is mounting this
+ * app, independent of bridgeless mode — the same signal RN's own
+ * `LayoutAnimation.js` gates on. Preferred over `global.RN$Bridgeless`: this
+ * package's new-architecture floor is RN >= 0.76 (docs/new-architecture-design.md,
+ * "Minimum React Native version"), but a non-bridgeless Fabric app is not
+ * impossible on that floor, and `RN$Bridgeless` alone would misclassify it.
+ * A missing/undefined `global` (no realistic RN target, but cheap to guard)
+ * degrades to `false` — the Legacy branch — never throws.
+ */
+function isNewArchitectureEnabled(): boolean {
+  return (
+    typeof global !== 'undefined' &&
+    (global as {nativeFabricUIManager?: unknown}).nativeFabricUIManager != null
+  );
+}
+
+/**
+ * Fabric dispatch: `Commands[name](ref, ...args)`. `ref` must be a live host
+ * component instance — codegen's `dispatchCommand` (via `RendererProxy`)
+ * requires a mounted instance and throws on a stale one, which is why every
+ * call site wraps this in the same try/catch as the Legacy path.
+ *
+ * A bare numeric tag (the `RlottieViewHandle` case a raw `findNodeHandle`
+ * result produces) cannot be turned into that instance, so it is treated the
+ * same as an unmounted view rather than attempted.
+ */
+function dispatchNewArchCommand(
+  view: Component,
+  command: RlottieCommandName,
+  args: readonly unknown[],
+): boolean {
+  const fn = RlottieViewCommands[NEW_ARCH_COMMAND_NAMES[command]] as
+    ((ref: unknown, ...rest: unknown[]) => void) | undefined;
+  if (typeof fn !== 'function') {
+    return false;
+  }
+  fn(view, ...args);
+  return true;
+}
 
 /**
  * Resolves whatever a consumer's `useRef` produced into a native tag, without
@@ -159,13 +224,29 @@ export function dispatchRlottieCommand(
   command: RlottieCommandName,
   args: readonly unknown[] = [],
 ): boolean {
+  if (view == null) {
+    return false;
+  }
+  const safeArgs = Array.isArray(args) ? Array.from(args) : [];
+
+  if (isNewArchitectureEnabled()) {
+    if (typeof view === 'number') {
+      return false;
+    }
+    try {
+      return dispatchNewArchCommand(view, command, safeArgs);
+    } catch {
+      // Never throw out of an imperative ref call — see the function doc above.
+      return false;
+    }
+  }
+
   const tag = resolveNativeTag(view);
   if (tag == null) {
     return false;
   }
 
   const commandId = resolveCommandId(command);
-  const safeArgs = Array.isArray(args) ? Array.from(args) : [];
 
   try {
     UIManager.dispatchViewManagerCommand(tag, commandId, safeArgs);

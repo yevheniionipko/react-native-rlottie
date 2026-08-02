@@ -17,7 +17,7 @@
 // node_modules, which is Flow-typed source that node cannot parse. The compiled
 // code under ./out resolves it via ./out/node_modules, so this is the same
 // module instance the code under test sees.
-const rn = require('./out/node_modules/react-native.js');
+const rn = require('./out/node_modules/react-native');
 const {
   Rlottie,
   configure,
@@ -137,7 +137,13 @@ async function main() {
   // Re-require the module with NativeModules.RlottieModule removed, to prove the
   // failure lands at the call site with a diagnostic rather than at import.
 
+  // Chunk 9.9: `RlottieModule.ts` resolves through `specs/NativeRlottieModule.ts`'s
+  // `TurboModuleRegistry.get(...)`, which is ALSO evaluated once at that spec
+  // module's own load time (mirroring the real TurboModuleRegistry) — so its
+  // cache entry must be invalidated too, or the re-require below would still see
+  // the module resolved before it was deleted below.
   delete require.cache[require.resolve('./out/RlottieModule.js')];
+  delete require.cache[require.resolve('./out/specs/NativeRlottieModule.js')];
   const savedModule = rn.__nativeModules.RlottieModule;
   delete rn.__nativeModules.RlottieModule;
 
@@ -173,6 +179,7 @@ async function main() {
   // Restore, so ordering between test files can never matter.
   rn.__nativeModules.RlottieModule = savedModule;
   delete require.cache[require.resolve('./out/RlottieModule.js')];
+  delete require.cache[require.resolve('./out/specs/NativeRlottieModule.js')];
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) {

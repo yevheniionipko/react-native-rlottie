@@ -24,11 +24,15 @@ echo "== compiling src/ -> $OUT"
 # comment in that file for why the flags are not spelled out here.
 npx --no-install tsc --project "$ROOT/tests/js/tsconfig.json"
 
-# Resolve `require('react-native')` to the stub. A node_modules dir beside the
-# compiled output is the least magical way to do it (no loader hooks, no
-# NODE_PATH), and it keeps the stub out of the package's own node_modules.
+# Resolve `require('react-native')` (and, since Chunk 9.9, the deep
+# `react-native/Libraries/Utilities/codegenNative{Commands,Component}`
+# imports the specs use) to the stub. A node_modules dir beside the compiled
+# output is the least magical way to do it (no loader hooks, no NODE_PATH),
+# and it keeps the stub out of the package's own node_modules. The stub is a
+# real directory (not a single file) so the deep imports resolve to it rather
+# than falling through to the real, Flow-only react-native sources.
 mkdir -p "$OUT/node_modules"
-cp "$ROOT/tests/js/stubs/react-native.js" "$OUT/node_modules/react-native.js"
+cp -R "$ROOT/tests/js/stubs/react-native" "$OUT/node_modules/react-native"
 
 echo "== running tests"
 node "$ROOT/tests/js/source.test.js"

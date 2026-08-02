@@ -1,4 +1,8 @@
 // Chunk 4.4 — the global `Rlottie` module.
+// Chunk 9.9 — resolved through the codegen spec's default export
+// (`TurboModuleRegistry.get`, which itself falls back to `NativeModules` on
+// the old architecture) instead of `NativeModules[MODULE_NAME]` directly. One
+// code path for both architectures; see docs/new-architecture-design.md §2.5.
 //
 // Process-wide operations ONLY (plan §15): the rlottie model-cache size and the
 // vendored native version. Per-view playback never routes through here — that is
@@ -11,8 +15,7 @@
 // `android/.../RlottieModule.kt` takes a trailing `Promise`), so `await` behaves
 // identically. See docs/bridge-contract.md "Global module".
 
-import {NativeModules} from 'react-native';
-
+import RlottieModuleSpec from './specs/NativeRlottieModule';
 import type {RlottieConfigureOptions, RlottieNativeVersion} from './types';
 
 /** Must match iOS `RCT_EXPORT_MODULE(RlottieModule)` and Kotlin `NAME`. */
@@ -34,8 +37,10 @@ const LINKING_ERROR =
   'It is also expected to be missing under Jest or any renderer without the ' +
   'native runtime.';
 
-const nativeModule: RlottieNativeModule | undefined =
-  NativeModules[MODULE_NAME];
+// `configure`'s spec argument is `UnsafeObject` (docs/new-architecture-design.md
+// §2.2), so the typed signature above is only enforced at this module's boundary,
+// same as it was against `NativeModules[MODULE_NAME]` before.
+const nativeModule = RlottieModuleSpec as RlottieNativeModule | null;
 
 /**
  * Resolves the native module, or throws a diagnostic error.

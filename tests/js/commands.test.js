@@ -1,7 +1,9 @@
 // Chunk 4.2 — tests for dispatchRlottieCommand.
+// Chunk 9.9 adds the new-architecture branch's coverage at the bottom of this
+// file.
 //
 // Run via tests/js/run-tests.sh, which compiles src/ with tsc and points the
-// `react-native` import at tests/js/stubs/react-native.js. No test framework,
+// `react-native` import at tests/js/stubs/react-native/. No test framework,
 // matching tests/js/source.test.js and the hand-rolled C++ harness in
 // tests/cpp.
 //
@@ -14,8 +16,13 @@
 //     command name string otherwise;
 //   * an unknown command name never throws, even though it can't resolve to a
 //     real id.
+//
+// Chunk 9.9 adds, on the new-architecture branch: the same never-throws /
+// false-for-unmounted contract, and that `setSpeed` (the public/Legacy name)
+// dispatches as `setPlaybackSpeed` (the Fabric `Commands` key) — see
+// docs/new-architecture-design.md §3.3.
 
-const rn = require('./out/node_modules/react-native.js');
+const rn = require('./out/node_modules/react-native');
 const {dispatchRlottieCommand, RlottieCommand} = require('./out/commands.js');
 
 let pass = 0;
@@ -232,6 +239,140 @@ ok(
   'non-array args become an empty array rather than crashing native',
   Array.isArray(rn.__dispatchedCalls[0].commandArgs) &&
     rn.__dispatchedCalls[0].commandArgs.length === 0,
+);
+
+// =============================================================================
+// Chunk 9.9 — the new-architecture dispatch branch.
+//
+// `rn.__setNewArchitectureEnabled(true)` sets `global.nativeFabricUIManager`,
+// the same signal `src/commands.ts`'s `isNewArchitectureEnabled()` reads.
+// Dispatches land in `rn.__newArchDispatchedCalls` (via the stubbed
+// `codegenNativeCommands`, tests/js/stubs/react-native/Libraries/Utilities/),
+// never in the Legacy `rn.__dispatchedCalls`.
+// =============================================================================
+
+function resetNewArch() {
+  reset();
+  rn.__newArchDispatchedCalls.length = 0;
+  rn.__setNewArchitectureEnabled(true);
+}
+
+const fakeHostRef = {};
+
+resetNewArch();
+ok(
+  'a mounted ref dispatches through the new-arch path (returns true)',
+  dispatchRlottieCommand(fakeHostRef, 'pause') === true,
+);
+ok(
+  'the new-arch call is recorded, not the Legacy UIManager path',
+  rn.__newArchDispatchedCalls.length === 1 && rn.__dispatchedCalls.length === 0,
+);
+ok(
+  'the ref and command name are forwarded as-is for a same-named command',
+  rn.__newArchDispatchedCalls[0].ref === fakeHostRef &&
+    rn.__newArchDispatchedCalls[0].command === 'pause',
+);
+
+resetNewArch();
+dispatchRlottieCommand(fakeHostRef, 'play', [10, -1]);
+ok(
+  'play forwards its args unchanged on the new-arch path',
+  rn.__newArchDispatchedCalls[0].command === 'play' &&
+    rn.__newArchDispatchedCalls[0].args.length === 2 &&
+    rn.__newArchDispatchedCalls[0].args[0] === 10 &&
+    rn.__newArchDispatchedCalls[0].args[1] === -1,
+);
+
+// --- setSpeed -> setPlaybackSpeed: the one renamed command ------------------
+
+resetNewArch();
+dispatchRlottieCommand(fakeHostRef, 'setSpeed', [2.5]);
+ok(
+  'the public/Legacy "setSpeed" name dispatches as "setPlaybackSpeed" on the new-arch path',
+  rn.__newArchDispatchedCalls.length === 1 &&
+    rn.__newArchDispatchedCalls[0].command === 'setPlaybackSpeed',
+  JSON.stringify(rn.__newArchDispatchedCalls),
+);
+ok(
+  'the setSpeed->setPlaybackSpeed rename forwards the speed arg unchanged',
+  rn.__newArchDispatchedCalls[0].args[0] === 2.5,
+);
+
+// --- Every other command name is untouched by the rename --------------------
+
+resetNewArch();
+for (const command of [
+  'play',
+  'pause',
+  'resume',
+  'stop',
+  'reset',
+  'seekToProgress',
+  'seekToFrame',
+  'playMarker',
+]) {
+  rn.__newArchDispatchedCalls.length = 0;
+  dispatchRlottieCommand(fakeHostRef, command, []);
+  ok(
+    `"${command}" dispatches under its own name on the new-arch path`,
+    rn.__newArchDispatchedCalls[0]?.command === command,
+  );
+}
+
+// --- Unmounted / no live handle: same contract as the Legacy path ----------
+
+resetNewArch();
+ok(
+  'null ref returns false on the new-arch path too',
+  dispatchRlottieCommand(null, 'play') === false,
+);
+ok('null ref dispatches nothing', rn.__newArchDispatchedCalls.length === 0);
+
+resetNewArch();
+ok(
+  'undefined ref returns false on the new-arch path too',
+  dispatchRlottieCommand(undefined, 'pause') === false,
+);
+
+// --- A bare numeric tag cannot be resolved to a Fabric host instance --------
+
+resetNewArch();
+ok(
+  'a raw numeric tag is not dispatchable on the new-arch path (returns false)',
+  dispatchRlottieCommand(7, 'resume') === false,
+);
+ok(
+  'a raw numeric tag under new-arch dispatches nothing on either path',
+  rn.__newArchDispatchedCalls.length === 0 && rn.__dispatchedCalls.length === 0,
+);
+
+// --- A stale/unmounted ref that codegen's real dispatchCommand would throw on --
+
+resetNewArch();
+let newArchThrew = false;
+let newArchResult;
+try {
+  newArchResult = dispatchRlottieCommand({__unmounted: true}, 'stop');
+} catch (e) {
+  newArchThrew = true;
+}
+ok(
+  'a throwing new-arch dispatch is swallowed, not propagated',
+  newArchThrew === false,
+);
+ok('a throwing new-arch dispatch resolves to false', newArchResult === false);
+
+// --- Switching architecture back off restores the Legacy path --------------
+
+reset();
+rn.__setNewArchitectureEnabled(false);
+dispatchRlottieCommand(1, 'setSpeed', [3]);
+ok(
+  'with the new-arch signal cleared, dispatch goes through UIManager again',
+  rn.__dispatchedCalls.length === 1 &&
+    rn.__dispatchedCalls[0].commandId === 'setSpeed' &&
+    rn.__newArchDispatchedCalls.length === 0,
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -37,7 +37,7 @@ const React = require('react');
 // notice is expected noise here, not a problem to fix by swapping renderers.
 const TestRenderer = require('react-test-renderer');
 
-const rn = require('./out/node_modules/react-native.js');
+const rn = require('./out/node_modules/react-native');
 const {RlottieView} = require('./out/RlottieView.js');
 
 let pass = 0;

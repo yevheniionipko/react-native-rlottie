@@ -5,7 +5,13 @@
 // touches, so a test passing here means the real code path ran, not a mock of
 // it. Today that is `Image.resolveAssetSource` in src/source.ts, plus
 // `UIManager`/`findNodeHandle`/`requireNativeComponent` for src/commands.ts
-// and src/RlottieNativeComponent.ts (Chunk 4.2).
+// and src/RlottieNativeComponent.ts (Chunk 4.2), plus `TurboModuleRegistry`
+// (src/specs/NativeRlottieModule.ts) and the deep `codegenNativeCommands`/
+// `codegenNativeComponent` imports in `src/specs/RlottieViewNativeComponent.ts`
+// (Chunk 9.9 — those stubs live in `Libraries/Utilities/` below, a real
+// directory under this package so the deep-import path resolves here instead
+// of falling through to the real (Flow-only, not Node-parseable)
+// `node_modules/react-native`).
 //
 // The UIManager/findNodeHandle shapes below are captured from the real
 // implementations in node_modules/react-native@0.81 (UIManager.js,
@@ -14,6 +20,10 @@
 // Tests can reach into `module.exports.__uiManagerMock` to configure/inspect
 // call behaviour.
 const dispatchedCalls = [];
+
+// What `Libraries/Utilities/codegenNativeCommands.js` (stubbed alongside this
+// file) records when the new-architecture dispatch path runs.
+const newArchDispatchedCalls = [];
 
 const uiManagerMock = {
   // Populated per-test via __setViewManagerConfig; PaperUIManager.js computes
@@ -104,9 +114,32 @@ module.exports = {
     return name;
   },
 
+  // src/RlottieModule.ts (Chunk 9.9) resolves through
+  // `specs/NativeRlottieModule.ts`'s `TurboModuleRegistry.get('RlottieModule')`
+  // rather than `NativeModules['RlottieModule']` directly. The real
+  // `TurboModuleRegistry.get` falls back to `NativeModules` on the old
+  // architecture (docs/new-architecture-design.md §2.2) — mirrored here as a
+  // direct `NativeModules` lookup, since this stub has no Fabric/TurboModule
+  // machinery to fall back FROM.
+  TurboModuleRegistry: {
+    get(name) {
+      return nativeModules[name] ?? null;
+    },
+  },
+
   // Test-only escape hatches, not part of the real react-native surface.
   __uiManagerMock: uiManagerMock,
   __dispatchedCalls: dispatchedCalls,
+  __newArchDispatchedCalls: newArchDispatchedCalls,
   __nativeModuleCalls: nativeModuleCalls,
   __nativeModules: nativeModules,
+
+  // Flips the same signal src/commands.ts's `isNewArchitectureEnabled` reads.
+  __setNewArchitectureEnabled(enabled) {
+    if (enabled) {
+      global.nativeFabricUIManager = {};
+    } else {
+      delete global.nativeFabricUIManager;
+    }
+  },
 };

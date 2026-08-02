@@ -1915,6 +1915,109 @@ behavior.
 | **Acceptance** | `npm run test:js`, `npm run typecheck`, `npm run lint` pass. `ref.play()` racing mount is still safe on both architectures. |
 | **Agent** | RNEngineer |
 
+**Status: done.**
+
+- `src/RlottieNativeComponent.ts` now re-exports `specs/RlottieViewNativeComponent`'s
+  default (`RlottieViewSpec as unknown as HostComponent<RlottieNativeProps>`)
+  instead of calling `requireNativeComponent` itself. `RlottieNativeProps` and
+  `RLOTTIE_COMPONENT_NAME` are unchanged exports; `RlottieView.tsx` needed no edit,
+  confirming §3.8's claim.
+- `src/RlottieModule.ts` resolves through `specs/NativeRlottieModule`'s default
+  export (`TurboModuleRegistry.get('RlottieModule')`) instead of
+  `NativeModules['RlottieModule']`. The lazy `requireNative()` wrapper,
+  `LINKING_ERROR`, and `isAvailable()` are untouched, per §2.5.
+- `src/commands.ts` gained exactly the one branch §3.3 specifies, plus the
+  `setSpeed` → `setPlaybackSpeed` name map (`NEW_ARCH_COMMAND_NAMES`) the "one
+  Fabric command" subsection calls out as this chunk's to write. Architecture
+  detection is `global.nativeFabricUIManager != null`, not `global.RN$Bridgeless`:
+  the latter is bridgeless-specific and, per this document's stated RN >= 0.76
+  floor, a non-bridgeless Fabric app on that floor is not ruled out, so it would
+  misclassify. `nativeFabricUIManager` is the same signal RN's own
+  `LayoutAnimation.js` reads, is set precisely when Fabric is mounting the app,
+  and degrades safely: an absent/falsy value takes the Legacy branch, and the
+  read itself cannot throw. The Fabric branch calls `Commands[name](ref, ...args)`
+  inside the same try/catch the Legacy path already had (`codegenNativeCommands`'s
+  `dispatchCommand` requires a live mounted host instance and throws otherwise —
+  exactly the stale-ref-racing-unmount case this function must swallow). A bare
+  numeric tag (the raw-`findNodeHandle`-result case `RlottieViewHandle` allows)
+  cannot be turned into that instance, so it now resolves to `false` under Fabric
+  rather than being attempted — a new, documented edge case; the Legacy path is
+  unaffected since it dispatches through `UIManager` by tag directly.
+- `RLOTTIE_COMMAND_IDS` and the `RlottieCommand` enum are untouched — still
+  reference-only, still keyed by `setSpeed` (never `setPlaybackSpeed`), per the
+  "nothing frozen changes" clause in §3.3.
+
+**A real gap in the JS test harness was found and fixed, not worked around.**
+`tests/js/run-tests.sh` compiled `src/` and pointed a single stub file,
+`tests/js/stubs/react-native.js`, at `require('react-native')`. That was
+sufficient through Chunk 9.8 because nothing under test imported a *subpath* of
+`react-native`. `specs/RlottieViewNativeComponent.ts` and
+`specs/NativeRlottieModule.ts` do — `codegenNativeCommands`/`codegenNativeComponent`
+from `react-native/Libraries/Utilities/...`, both Flow source — and Node's module
+resolution for a scoped subpath only matches a `node_modules/react-native/`
+**directory**, so a same-named `.js` file doesn't shadow it; resolution fell
+through to the real (Flow, not Node-parseable) `node_modules/react-native` and
+crashed at require time (`commands.test.js` and `module.test.js` both hit this
+via their existing imports of `src/commands.ts`/`src/RlottieModule.ts`).
+Fixed by turning the stub into a real package directory
+(`tests/js/stubs/react-native/index.js` — a straight move of the old file — plus
+new `Libraries/Utilities/codegenNativeCommands.js` and `codegenNativeComponent.js`
+stubs) and copying that whole directory into `tests/js/out/node_modules/react-native/`
+instead of a single file. `TurboModuleRegistry.get` was added to the main stub
+(falls back to the existing `__nativeModules` lookup, mirroring what the real
+`TurboModuleRegistry.get` does on the old architecture). The new
+`codegenNativeCommands` stub records dispatches on a new
+`__newArchDispatchedCalls` array (separate from the Legacy `__dispatchedCalls`)
+and throws when given a `{__unmounted: true}` ref, mirroring the real
+`dispatchCommand`'s "must be a live mounted instance" contract so the new
+try/catch path is exercised for real rather than assumed. A
+`__setNewArchitectureEnabled(bool)` helper flips `global.nativeFabricUIManager`
+for tests. The three test files that previously did
+`require('./out/node_modules/react-native.js')` by exact file path now require
+the directory (`require('./out/node_modules/react-native')`); `module.test.js`'s
+"unlinked module" simulation additionally had to invalidate
+`specs/NativeRlottieModule.js`'s own require-cache entry, not just
+`RlottieModule.js`'s — the spec module resolves `TurboModuleRegistry.get(...)`
+once at its own load time, so only clearing the downstream file's cache left the
+stale resolution cached one module up.
+
+`tests/js/commands.test.js` gained a full section covering the new-architecture
+branch: a mounted ref dispatches through `__newArchDispatchedCalls` and never
+`__dispatchedCalls`; `setSpeed` dispatches as `setPlaybackSpeed` while every other
+command name is untouched; `null`/`undefined` refs and a bare numeric tag all
+return `false` without dispatching; a throwing dispatch (stale ref) is swallowed;
+and toggling the architecture signal back off restores the Legacy `UIManager`
+path. Verified: `npm run typecheck`, `npm run lint`, and `npm run test:js` all
+pass — 253 assertions across `source`/`commands`/`module` (up from 181/27/20
+before this chunk's additions), plus the pre-existing, environment-only SKIP of
+`view.test.js` (react@18.2.0 vs react-test-renderer@19.2.8, recorded in
+CLAUDE.md and Chunk 8.1 — unrelated to this chunk and not touched by it).
+
+**Not verified here** (needs Chunk 9.10's device pass): that
+`global.nativeFabricUIManager` is actually set at the point `dispatchRlottieCommand`
+runs in a real Fabric app, and that `Commands[name](ref, ...)` really reaches the
+generated iOS/Android command protocols end-to-end with a live `nativeRef.current`
+from `RlottieView.tsx` (as opposed to the hand-built fake ref this chunk's tests
+use). The stub proves the JS-side branching, mapping, and error-swallowing logic;
+it cannot prove the real `codegenNativeCommands`/`TurboModuleRegistry` behave
+identically to how this document describes them without a real bundle and device.
+
+**Unrelated pre-existing defect found and fixed while reviewing this chunk.**
+`src/RlottieView.tsx` contained a **raw NUL byte** (`0x00`) written directly
+into the `failureKey` template literal — the separator that keeps
+`{code, message}` pairs from aliasing in the render-time error dedup. The
+separator itself is correct and stays; the problem was writing it as a literal
+byte rather than the `\u0000` escape. One NUL makes the whole file
+non-text: `file` reports `data`, and **`grep` silently skips it entirely**
+(exit 1, no output, no "binary file matches" notice under the flags in normal
+use). Every `grep`/`rg` sweep over `src/` had been quietly missing this file —
+it produced two false negatives during this chunk's review before the cause was
+found. Replaced with `\u0000`, which yields a byte-identical string (verified:
+same length, same code point 0 at the same index) and makes the file valid
+UTF-8 text again; `grep` immediately found the 10 references it had been
+skipping. Dates from Chunk 4.3, unrelated to the new architecture, but worth
+recording because the failure mode is silent and misleading.
+
 ### Chunk 9.10 — Dual-architecture example app, verification matrix, docs
 | | |
 |---|---|
