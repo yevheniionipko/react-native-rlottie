@@ -1,0 +1,58 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath "com.android.tools.build:gradle:7.4.2"
+  }
+}
+
+apply plugin: "com.android.library"
+
+def safeExtGet(prop, fallback) {
+  rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+android {
+  namespace "com.rlottie"
+  compileSdkVersion safeExtGet("compileSdkVersion", 34)
+  ndkVersion safeExtGet("ndkVersion", "25.1.8937393")
+
+  defaultConfig {
+    minSdkVersion safeExtGet("minSdkVersion", 21)
+    targetSdkVersion safeExtGet("targetSdkVersion", 34)
+
+    externalNativeBuild {
+      cmake {
+        cppFlags "-std=c++17"
+        arguments "-DANDROID_STL=c++_shared"
+        // Minimal wiring (Chunk 0.3) targets arm64-v8a + x86_64. armeabi-v7a is
+        // opt-in: on 32-bit ARM, Apple/NDK clang defines __ARM_NEON__, which pulls
+        // in rlottie's 32-bit pixman NEON ASM path (kept optional per plan §14).
+        abiFilters(*safeExtGet("rlottieAbiFilters", ["arm64-v8a", "x86_64"]))
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path "src/main/cpp/CMakeLists.txt"
+      version safeExtGet("cmakeVersion", "3.22.1")
+    }
+  }
+
+  buildFeatures {
+    prefab false
+  }
+}
+
+repositories {
+  google()
+  mavenCentral()
+}
+
+dependencies {
+  //noinspection GradleDynamicVersion
+  implementation "com.facebook.react:react-native:+"
+}
