@@ -17,7 +17,7 @@
 import React, {useCallback, useRef, useState} from 'react';
 import {
   Alert,
-  SafeAreaView,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -134,10 +134,21 @@ export default function App() {
   const [nativeVersion, setNativeVersion] = useState<string>('(not queried)');
   const [cacheSizeInput, setCacheSizeInput] = useState('4');
 
+  // Deliberately NOT SafeAreaView: RN 0.81 deprecates it (it warns at runtime)
+  // and its replacement, react-native-safe-area-context, is a dependency this
+  // example does not need. ScrollView's contentInsetAdjustmentBehavior handles
+  // the iOS inset; Android needs the status-bar height added by hand.
   return (
-    <SafeAreaView style={styles.safe}>
+    <View style={styles.safe}>
       <StatusBar barStyle="dark-content" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={[
+          styles.scrollContent,
+          Platform.OS === 'android' && {
+            paddingTop: (StatusBar.currentHeight ?? 0) + 16,
+          },
+        ]}>
         <Text style={styles.title}>react-native-rlottie example</Text>
         <Text style={styles.subtitle}>Legacy Architecture · RN 0.81.0</Text>
 
@@ -398,7 +409,7 @@ export default function App() {
           )}
         </Section>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

@@ -13,6 +13,18 @@ from a native frame buffer on its own display clock (`CADisplayLink` on iOS,
 `onMetrics`, throttled to at most once per second (see
 [`docs/api-reference.md`](docs/api-reference.md)).
 
+## Demo
+
+[**Screen recording of the example app**](video.mov) (47s) — playback, the
+imperative commands, marker playback, the dynamic-property overrides, and live
+`onMetrics` output.
+
+Neither GitHub nor npm plays a relative `.mov` inline, so that link downloads
+the file. For a quick look without downloading, `example/screenshots/` has
+stills from both platforms (`android.png`, `ios.png`), and
+[`example/README.md`](example/README.md) documents everything the app
+exercises.
+
 ## Architecture at a glance
 
 ```
@@ -137,13 +149,11 @@ Notes worth knowing before you pick a version:
   (pnpm, custom hoisting) that defeats the package.json lookup is easy to
   recognize — see `reactNativeVersion` in `android/build.gradle` for the
   override.
-- **React 19 vs React 18.2.0.** RN 0.81 itself expects React 19, but this
-  repo's own `devDependencies` still pin `react@18.2.0` /
-  `react-test-renderer@^19.2.8` (a mismatch already present before this
-  library's own tests were added — see `package.json`). `react` is a
-  `peerDependency` here (`"*"`), so your app's own React version is what
-  actually matters at runtime; this repo's pin is a development-time
-  inconsistency, not a constraint this library imposes on consumers.
+- **React version.** `react` is a `peerDependency` here (`"*"`), so your app's
+  own React version is what matters at runtime — this library imposes no React
+  version of its own. For development, `devDependencies` pin
+  `react`/`react-test-renderer` at a matching **19.1.0**, which is what
+  `react-native@0.81` itself expects (`peerDependencies.react: ^19.1.0`).
 
 ## Further reading
 

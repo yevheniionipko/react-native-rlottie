@@ -60,12 +60,12 @@ script's header comment for the exact precedent this follows
   NDK compiler driver maps the flag onto libc++), so `golden_runner` is a
   single self-contained ELF — verified by running it directly via
   `adb shell` with no extra libraries pushed.
-- **The NDK API used to *compile* (`RNRLOTTIE_NDK_API`, default 24) is
+- **The NDK API used to _compile_ (`RNRLOTTIE_NDK_API`, default 24) is
   independent of the device's actual API level.** It only sets the binary's
   minimum-API floor; a lower compile-time API than the device's own is
   expected and fine (verified: compiled for API 24, ran on an API 37 device).
   Likewise `android-36/android.jar` (the highest `platforms/` component
   installed when this was written) was used for `javac`/`d8` even though the
   device reports API 37 — an `android.jar`'s version only bounds which SDK
-  *symbols* are available at compile time, not which device the resulting
+  _symbols_ are available at compile time, not which device the resulting
   `.dex` can execute on.

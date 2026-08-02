@@ -342,18 +342,80 @@ compositor finally displays. No text/image fixtures (they need external
 font/raster resources; a fixture whose resource fails to resolve renders blank —
 the exact vacuity trap above). arm64 only for golden pixels.
 
-Next: Phase 8.
+**Phase 8 (Chunk 8.1, "Ship v1") is complete.** `README.md` (install guide +
+supported-RN matrix), `docs/api-reference.md`, `docs/troubleshooting.md`,
+`CHANGELOG.md`, a root `LICENSE` (which did not exist despite `package.json`
+declaring MIT), an enumerated `THIRD_PARTY_NOTICES.md`, `scripts/verify-abis.sh`
++ `scripts/verify-npm-package.sh`, a real `example/` app, and
+`tests/js/view.test.js`.
 
-Not done, and out of reach in a headless environment: the plan's "example app
-runs on device + emulator" for Chunk 3.5. `example/` is still an empty
-placeholder — building it is Phase 4/5 work and needs a real device or emulator.
+**Building the example app is what earned this phase** — it exposed two faults
+that every prior check had missed, both of which would have broken a consumer's
+very first build:
+
+1. **The Android module did not compile against a real RN artifact.**
+   `getCommandsMap()` returned `MapBuilder.build()`, and as of RN 0.81
+   `MapBuilder` is itself **Kotlin** whose `build()` returns a READ-ONLY
+   `kotlin.collections.Map` — which cannot satisfy the override's
+   `MutableMap<String, Int>`. Chunk 3.5's standalone AAR build never caught it.
+   Now built with `mutableMapOf` directly (`RlottieEvents` had already hit the
+   same wall and papered over it with `.toMutableMap()`).
+2. **The podspec poisoned `#include <stdint.h>` for the whole iOS target.**
+   `source_files`' recursive `**/*.h` swept in rapidjson's `msinttypes/`
+   MSVC-only shims, and Xcode's per-target header map then resolved
+   `<stdint.h>` to `msinttypes/stdint.h` ahead of the real system header — the
+   shim `#error`s under any non-MSVC compiler. Now excluded. A command-line
+   compile (Chunk 0.3) has no header map, which is why only a pod-based Xcode
+   build could reveal this.
+
+Verified on the same virtual devices as 7.4: `run-android` on the API 37 arm64
+emulator and an `xcodebuild`+`simctl` install on the iOS 18.2 simulator, both
+rendering two live animations (bundled `asset:///` + inline JSON object) with
+metadata from `onAnimationLoaded`. Screenshots in `example/screenshots/` were
+checked by eye — colors match across platforms, which is an independent
+confirmation of the channel-order handling. Remaining runtime warning is RN's
+own Legacy-Architecture deprecation notice: expected, since v1 targets Legacy.
+
+Two more real defects found by the verification scripts:
+
+- **The npm tarball shipped `android/.cxx`** — a local CMake build cache
+  (~56 MB of `.o`/`.a`, including a stray `librlottie.a`), because `files`
+  listed all of `android/` and excluded only `android/build`. 12 MB packed /
+  60.8 MB unpacked → **590 KB / 3.2 MB**. Run `npm run verify:npm-package`
+  after touching `files`.
+- **`src/vector/vinterpolator.cpp` is MPL-2.0 and IS compiled**, but rlottie's
+  own `COPYING` never lists it (it claims `src/vector/ -> MIT, SKIA`). Our
+  notices now enumerate every sub-component independently of upstream's summary.
+  Conversely, pixman's NEON `.S`/`.h` ships as source but is compiled on no
+  platform we build — documented rather than silently dropped.
+
+**One thing is left in an inconsistent state, deliberately and visibly.**
+`react`/`react-test-renderer` are now pinned at a matching **19.1.0** (RN 0.81
+peers `react@^19.1.0`; the old `react@18.2.0` violated that and was why the
+component's render path had no tests). `tests/js/view.test.js` is real and
+passes — **47 assertions, verified green against React 19.1.0** — but this
+machine's npm registry proxy refuses installs, so `node_modules` and
+`package-lock.json` still hold `react@18.2.0`. Consequences:
+
+- `npm ci` will FAIL here until `npm install` is re-run somewhere with registry
+  access, which regenerates the lockfile. That is the one outstanding action.
+- `tests/js/run-tests.sh` probes whether `react-test-renderer` can even load
+  (a mismatched pair throws at REQUIRE time) and prints a loud SKIP block rather
+  than failing the whole JS gate for an environment problem — but it says
+  plainly that the render path went uncovered. Do not let that skip become
+  invisible.
 
 ### Commands
 
 ```bash
 # JS/TS (needs `npm install` first)
 npm run typecheck        # tsc --noEmit
-npm run test:js          # source normalization + cache-key tests (no framework)
+npm run test:js          # source normalization, commands, module, RlottieView
+                         # render behaviour (no framework; view test needs a
+                         # matching react/react-test-renderer pair installed)
+npm run verify:npm-package  # what the tarball actually contains (Chunk 8.1)
+npm run verify:abis         # every shipped ABI: link, exported JNI symbols,
+                            # 16 KB alignment, podspec flags/globs
 npm run lint             # eslint src
 npm run format:check     # prettier --check  (NOTE: several .md files at repo
                          # root were already unformatted before Phase 4)

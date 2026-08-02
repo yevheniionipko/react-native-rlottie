@@ -25,7 +25,16 @@
 // mock of it. `createNodeMock` supplies the `__nativeTag` the stub's
 // findNodeHandle looks for, so ref commands travel the real dispatch path.
 
+// React only enables act() (and stops warning about it) when this global is
+// set. It is normally set by a test framework's environment; there is no
+// framework here, so set it explicitly before requiring the renderer.
+global.IS_REACT_ACT_ENVIRONMENT = true;
+
 const React = require('react');
+// react-test-renderer prints its own deprecation notice on React 19. It is
+// still what React Native's own test tooling uses for host-component trees, and
+// it is the only renderer that can inspect native props without a DOM — so the
+// notice is expected noise here, not a problem to fix by swapping renderers.
 const TestRenderer = require('react-test-renderer');
 
 const rn = require('./out/node_modules/react-native.js');
@@ -79,7 +88,9 @@ const OTHER_BAD_URI = 'http://cdn.example.com/a.json'; // a DIFFERENT failure me
 // between the doc and what native receives shows up here.
 
 {
-  const r = render(React.createElement(RlottieView, {source: {uri: VALID_URI}}));
+  const r = render(
+    React.createElement(RlottieView, {source: {uri: VALID_URI}}),
+  );
   const p = nativeProps(r);
   ok('default autoPlay is false', p.autoPlay === false);
   ok('default loop is false', p.loop === false);
@@ -134,7 +145,7 @@ const OTHER_BAD_URI = 'http://cdn.example.com/a.json'; // a DIFFERENT failure me
 
 {
   const calls = [];
-  const onAnimationError = (e) => calls.push(e.nativeEvent);
+  const onAnimationError = e => calls.push(e.nativeEvent);
 
   const r = render(
     React.createElement(RlottieView, {
@@ -198,10 +209,7 @@ const OTHER_BAD_URI = 'http://cdn.example.com/a.json'; // a DIFFERENT failure me
       onAnimationError,
     }),
   );
-  ok(
-    'the same failure after a recovery is reported again',
-    calls.length === 3,
-  );
+  ok('the same failure after a recovery is reported again', calls.length === 3);
 }
 
 // A failing source must not leave the last good one on the native prop: both
@@ -307,7 +315,10 @@ function withRef(extraProps) {
     call && call.commandArgs[0] === -1 && call.commandArgs[1] === -1,
     call ? JSON.stringify(call.commandArgs) : 'no call',
   );
-  ok('the dispatch uses the resolved native tag', call && call.reactTag === NATIVE_TAG);
+  ok(
+    'the dispatch uses the resolved native tag',
+    call && call.reactTag === NATIVE_TAG,
+  );
 }
 
 {
@@ -343,7 +354,7 @@ function withRef(extraProps) {
     ref.current.stop();
     ref.current.reset();
   });
-  const ids = rn.__dispatchedCalls.map((c) => c.commandId);
+  const ids = rn.__dispatchedCalls.map(c => c.commandId);
   ok(
     'pause/resume/stop/reset map to their own ids in order',
     ids.join(',') === '2,3,4,5',
@@ -359,25 +370,43 @@ function withRef(extraProps) {
     ref.current.seekToFrame(7);
     ref.current.setSpeed(NaN);
   });
-  const args = rn.__dispatchedCalls.map((c) => c.commandArgs[0]);
+  const args = rn.__dispatchedCalls.map(c => c.commandArgs[0]);
   ok('seekToProgress clamps above 1', args[0] === 1);
   ok('seekToProgress clamps below 0', args[1] === 0);
   ok('seekToFrame passes the frame through', args[2] === 7);
   ok('setSpeed falls back to 1 on a non-finite value', args[3] === 1);
 }
 
-// A command issued after unmount must fail safe, not throw: `ref.play()`
+// A command issued after unmount must fail safe, not throw — `ref.play()`
 // racing teardown is ordinary consumer code.
+//
+// Note WHICH object is called here: React nulls `ref.current` on unmount, so
+// `ref.current.play()` would throw on `null` before reaching any of our code
+// and would prove nothing. The library's actual guarantee is in
+// dispatchRlottieCommand, which must no-op (return false) once the view has no
+// native handle — so the test holds the imperative API object captured while
+// mounted and calls it afterwards, which is also what a consumer's
+// `const {play} = ref.current` or a captured callback does.
 {
   const {ref, renderer} = withRef();
+  const api = ref.current;
   TestRenderer.act(() => renderer.unmount());
+  rn.__dispatchedCalls.length = 0;
   let threw = false;
   try {
-    ref.current.play();
+    api.play();
+    api.pause();
+    api.seekToProgress(0.5);
   } catch {
     threw = true;
   }
   ok('a command after unmount does not throw', threw === false);
+  ok(
+    'and dispatches nothing to a view that no longer exists',
+    rn.__dispatchedCalls.length === 0,
+    `${rn.__dispatchedCalls.length} dispatch(es)`,
+  );
+  ok('React itself nulls ref.current on unmount', ref.current === null);
 }
 
 // --- Native events pass through to the consumer's handlers ------------------

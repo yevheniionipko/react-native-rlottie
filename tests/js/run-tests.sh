@@ -34,9 +34,26 @@ echo "== running tests"
 node "$ROOT/tests/js/source.test.js"
 node "$ROOT/tests/js/commands.test.js"
 node "$ROOT/tests/js/module.test.js"
-# view.test.js renders RlottieView through react-test-renderer (Chunk 8.1). It
-# needs `react`/`react-test-renderer` resolvable, which they are from the repo's
-# own node_modules — and their versions must MATCH: react-test-renderer declares
-# a hard peer on the same React minor and crashes on load against a different
-# one (this was the reason the render path stayed untested through Phase 7).
-node "$ROOT/tests/js/view.test.js"
+
+# view.test.js renders RlottieView through react-test-renderer (Chunk 8.1),
+# which is the only way to test the component's render-time behaviour.
+#
+# react-test-renderer reaches into React's internals, so a mismatched pair does
+# not merely warn — it throws at REQUIRE time ("Cannot read properties of
+# undefined (reading 'S')" for an rtr@19 against react@18). package.json pins a
+# matching pair, so a normal `npm install` runs this file. The probe below
+# exists for the case where node_modules does NOT match what package.json
+# declares (e.g. an install that could not reach the registry): report loudly
+# and keep going, rather than failing the whole JS gate for an environment
+# problem or — worse — skipping in silence.
+if node -e 'require("react-test-renderer")' >/dev/null 2>&1; then
+  node "$ROOT/tests/js/view.test.js"
+else
+  echo
+  echo "!! SKIPPING tests/js/view.test.js — react-test-renderer cannot load."
+  echo "   Installed: react=$(node -p 'require("react/package.json").version' 2>/dev/null || echo '?')" \
+       "react-test-renderer=$(node -p 'require("react-test-renderer/package.json").version' 2>/dev/null || echo '?')"
+  echo "   These must be the matching pair package.json declares. Run \`npm install\`."
+  echo "   RlottieView's render-time behaviour is NOT covered by this run."
+  echo
+fi
