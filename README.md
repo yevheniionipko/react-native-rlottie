@@ -45,9 +45,9 @@ below before adding this to a New Architecture app.
 ## Installation
 
 ```sh
-npm install react-native-rlottie
+npm install @yevheniionipko/react-native-rlottie
 # or
-yarn add react-native-rlottie
+yarn add @yevheniionipko/react-native-rlottie
 ```
 
 ### iOS
@@ -92,7 +92,10 @@ changed.
 ```tsx
 import React, {useRef} from 'react';
 import {View} from 'react-native';
-import {RlottieView, type RlottieViewRef} from 'react-native-rlottie';
+import {
+  RlottieView,
+  type RlottieViewRef,
+} from '@yevheniionipko/react-native-rlottie';
 
 function MyAnimation() {
   const ref = useRef<RlottieViewRef>(null);

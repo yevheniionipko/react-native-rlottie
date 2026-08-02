@@ -1,7 +1,16 @@
 {
-  "name": "react-native-rlottie",
+  "name": "@yevheniionipko/react-native-rlottie",
   "version": "0.1.0",
   "description": "High-performance Lottie animations for React Native, rendered natively via the rlottie C++ engine (Legacy Architecture, RN <= 0.81).",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yevheniionipko/react-native-rlottie.git"
+  },
+  "homepage": "https://github.com/yevheniionipko/react-native-rlottie#readme",
+  "bugs": {
+    "url": "https://github.com/yevheniionipko/react-native-rlottie/issues"
+  },
+  "author": "yevheniionipko",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "react-native": "src/index.ts",
@@ -58,6 +67,9 @@
     "native-component"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "react": "*",
     "react-native": ">=0.68.0 <0.82.0"

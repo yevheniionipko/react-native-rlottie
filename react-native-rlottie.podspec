@@ -20,11 +20,11 @@ Pod::Spec.new do |s|
   s.name         = "react-native-rlottie"
   s.version      = package["version"]
   s.summary      = package["description"]
-  s.homepage     = "https://github.com/your-org/react-native-rlottie" # TODO: set on publish
+  s.homepage     = "https://github.com/yevheniionipko/react-native-rlottie"
   s.license      = package["license"]
   s.authors      = "react-native-rlottie contributors"
   s.platforms    = { :ios => "13.0" }
-  s.source       = { :git => "https://github.com/your-org/react-native-rlottie.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/yevheniionipko/react-native-rlottie.git", :tag => "#{s.version}" }
 
   s.requires_arc = true
   s.dependency "React-Core"

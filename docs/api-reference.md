@@ -14,7 +14,7 @@ import {
   getNativeVersion,
   isAvailable,
   RlottieCommand,
-} from 'react-native-rlottie';
+} from '@yevheniionipko/react-native-rlottie';
 import type {
   RlottieSource,
   RlottieJsonObject,
@@ -35,7 +35,7 @@ import type {
   RlottiePlayOptions,
   RlottieNativeVersion,
   RlottieConfigureOptions,
-} from 'react-native-rlottie';
+} from '@yevheniionipko/react-native-rlottie';
 ```
 
 Importing from any other path (e.g.
