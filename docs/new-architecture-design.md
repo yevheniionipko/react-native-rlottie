@@ -1697,6 +1697,70 @@ verification matrix. Do not treat this status note as that confirmation.
 | **Agent** | RNEngineer, with CPPEngineer on the C++20 question |
 | **Risks** | The C++20 promotion of the shared core is the one change here that touches shipped code semantics. |
 
+**Status: done.** `react-native-rlottie.podspec` now `require`s
+`react_native_pods.rb` (resolved via `node --print require.resolve`, so it
+works regardless of hoisting), and `install_modules_dependencies(s)` is the
+last statement in the spec block, exactly as §1.4 requires. The `core`
+subspec's `CLANG_CXX_LANGUAGE_STANDARD => "c++17"` pin was dropped (it would
+have been overwritten anyway); `ios/**/*.{h,m,mm}` was left as the only
+`core` glob rather than adding a separate `ios/fabric/**` entry, since it
+already recurses into `ios/fabric/` once Chunk 9.8 creates it — a glob
+matching zero files today is harmless, confirmed below, so no placeholder
+file was created. The `rlottie` subspec's `-std=gnu++14 -fno-exceptions
+-fno-rtti -U__ARM_NEON__` stayed exactly as-is, in per-file `compiler_flags`.
+
+Verified for real, against `example/ios` (RN 0.81.0, CocoaPods 1.17.0,
+Xcode 26.6):
+
+- `pod install` succeeds with the example Podfile's `new_arch_enabled` both
+  `false` (its committed state) and (temporarily, then reverted)
+  `true`/`fabric_enabled: true`. Both runs pull in `React-RCTFabric`,
+  `React-RCTRuntime`, etc. unconditionally, matching §1.4's claim that
+  `install_modules_dependencies` adds those pods regardless of the flag.
+- `pod spec lint --quick --allow-warnings` on `react-native-rlottie.podspec`
+  passes standalone.
+- The generated `react-native-rlottie.debug.xcconfig` confirms the merge
+  behaviour by inspection: `CLANG_CXX_LANGUAGE_STANDARD = c++20`, our
+  `HEADER_SEARCH_PATHS` appended after RN's own entries (preserved, not
+  lost), and — only in the new-arch run — `OTHER_CPLUSPLUSFLAGS = $(inherited)
+  -DRCT_NEW_ARCH_ENABLED=1`. The generated `Pods.xcodeproj` shows each
+  rlottie source's `PBXBuildFile.settings.COMPILER_FLAGS` still carrying
+  `-std=gnu++14 -fno-exceptions -fno-rtti -U__ARM_NEON__ -DNDEBUG -w`
+  per-file, i.e. unaffected by the target-level c++20 switch.
+- A full `xcodebuild … -sdk iphonesimulator build` of `RlottieExample`
+  reached **`** BUILD SUCCEEDED **`** with `fabric_enabled: true,
+  new_arch_enabled: true`. `libreact-native-rlottie.a` was produced for both
+  `arm64` and `x86_64`, containing compiled objects for every `cpp/*.cpp`
+  file and every `ios/*.mm` file (including `RNRlottieView.o`,
+  `RNRlottieViewManager.o`) with empty `.dia` diagnostics — a real compile,
+  not just a `pod install` dry run. The same build was re-run with the
+  Podfile reverted to `new_arch_enabled: false`; that run was still in
+  flight when this note was written — see the follow-up note below if it
+  finished after.
+- **Ranked risk #7, the C++20 promotion, was verified directly** rather than
+  assumed: `cpp/RlottiePlayerCore.cpp`, `FrameBuffer.cpp`,
+  `PlaybackController.cpp`, `RenderCoordinator.cpp`,
+  `ModelCacheController.cpp`, plus `android/src/main/cpp/JniPlayerHandle.cpp`
+  and `AndroidFrameSink.cpp`, were compiled with `-std=c++20 -Wall -Wextra
+  -Werror` on the host (clang, arm64 macOS) — first as a `-fsyntax-only`
+  pass per file, then as a full build linked against vendored rlottie
+  compiled at `-std=c++14` (the exact mixed-standard shape
+  `install_modules_dependencies` produces) and the existing
+  `tests/cpp/*.cpp` test suite. All 107 tests passed. **The shared core
+  compiles clean as C++20 — this is not an assumption.**
+- `example/ios/Podfile` and `example/ios/RlottieExample/Info.plist` (the
+  latter changed by CocoaPods' own post-install step, not by hand) were both
+  reverted to their committed old-arch state afterward; `git diff --stat` on
+  both is empty. Neither is a deliverable of this chunk (§4 marks them
+  Chunk 9.10's).
+
+Not verified here, left for later chunks: the iOS `ios/fabric/` component
+view itself does not exist yet (Chunk 9.8), so the new-arch build above
+proves the *build system* accepts a Fabric-enabled configuration and that
+existing Legacy iOS code still compiles under it — not that a Fabric
+component actually renders. Device-level (vs. simulator-level) verification
+is Chunk 9.10's.
+
 ### Chunk 9.7 — iOS TurboModule
 | | |
 |---|---|
@@ -1706,6 +1770,36 @@ verification matrix. Do not treat this status note as that confirmation.
 | **Contract** | §2.3. Selectors must match the generated header, verified against the real file rather than this document. Bodies unchanged. |
 | **Acceptance** | Same three calls resolve identically on both architectures; parity with Android's error contract preserved. |
 | **Agent** | RNEngineer |
+
+**Status: done.** `ios/RNRlottieModule.mm` was modified in place. It keeps
+`RCT_EXPORT_MODULE(RlottieModule)` and `+requiresMainQueueSetup` → `NO`, adds
+`<NativeRlottieModuleSpec>` conformance and the `-getTurboModule:` factory
+behind `#ifdef RCT_NEW_ARCH_ENABLED`, and all three method bodies are
+byte-identical to before — same forwards into `rnrlottie::ModelCacheController`
+and `rnrlottie::kRlottieCommit`, same Promise shape, same error contract.
+
+The one real hazard here was the selectors, and it was closed by reading the
+**generated header** rather than trusting this document. The old file used
+`RCT_REMAP_METHOD`, which invents its own selector
+(`configureWithOptions:resolver:rejecter:`) that the generated protocol does
+not declare — a mismatch compiles with only a protocol warning and fails at
+runtime with "method not found", but *only* under the new architecture. The
+protocol in
+`build/generated/ios/RNRlottieSpec/RNRlottieSpec.h` declares exactly:
+
+```objc
+- (void)configure:(NSDictionary *)options
+          resolve:(RCTPromiseResolveBlock)resolve
+           reject:(RCTPromiseRejectBlock)reject;
+- (void)clearModelCache:(RCTPromiseResolveBlock)resolve
+                 reject:(RCTPromiseRejectBlock)reject;
+- (void)getNativeVersion:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject;
+```
+
+so the file now uses plain `RCT_EXPORT_METHOD` producing `configure:resolve:reject:`,
+`clearModelCache:reject:`, and `getNativeVersion:reject:`. Verified against a
+regenerated header, not against this document.
 
 ### Chunk 9.8 — iOS Fabric component view
 | | |

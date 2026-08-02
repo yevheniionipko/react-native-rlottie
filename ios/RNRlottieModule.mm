@@ -14,8 +14,14 @@
 #include "ModelCacheController.h"
 #include "RlottieVersion.h"
 
+#ifdef RCT_NEW_ARCH_ENABLED
+#import <RNRlottieSpec/RNRlottieSpec.h>
+@interface RNRlottieModule : NSObject <NativeRlottieModuleSpec>
+@end
+#else
 @interface RNRlottieModule : NSObject <RCTBridgeModule>
 @end
+#endif
 
 @implementation RNRlottieModule
 
@@ -30,6 +36,13 @@ RCT_EXPORT_MODULE(RlottieModule)
   return NO;
 }
 
+#ifdef RCT_NEW_ARCH_ENABLED
+- (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
+    (const facebook::react::ObjCTurboModule::InitParams &)params {
+  return std::make_shared<facebook::react::NativeRlottieModuleSpecJSI>(params);
+}
+#endif
+
 // All three methods are Promise-based, matching Android's RlottieModule
 // exactly. A fire-and-forget `configure`/`clearModelCache` here would make
 // `await Rlottie.configure(...)` surface failures on Android but silently
@@ -41,11 +54,10 @@ RCT_EXPORT_MODULE(RlottieModule)
 // than clamped to 0 — clamping to 0 would surprise-disable caching entirely
 // on a bad call. Callers can always read back what actually took effect via
 // -getNativeVersion's `modelCacheSize`.
-RCT_REMAP_METHOD(configure,
-                  configureWithOptions
-                  : (NSDictionary *)options resolver
-                  : (RCTPromiseResolveBlock)resolve rejecter
-                  : (RCTPromiseRejectBlock)reject) {
+RCT_EXPORT_METHOD(configure
+                   : (NSDictionary *)options resolve
+                   : (RCTPromiseResolveBlock)resolve reject
+                   : (RCTPromiseRejectBlock)reject) {
   (void)reject;  // Nothing here can fail.
   id rawSize = options[@"modelCacheSize"];
   if ([rawSize isKindOfClass:[NSNumber class]]) {
@@ -59,10 +71,9 @@ RCT_REMAP_METHOD(configure,
 
 // `clearModelCache()` -> ModelCacheController::clearModelCache. Flushes the
 // cache while preserving the configured size (see that header).
-RCT_REMAP_METHOD(clearModelCache,
-                  clearModelCacheWithResolver
-                  : (RCTPromiseResolveBlock)resolve rejecter
-                  : (RCTPromiseRejectBlock)reject) {
+RCT_EXPORT_METHOD(clearModelCache
+                   : (RCTPromiseResolveBlock)resolve reject
+                   : (RCTPromiseRejectBlock)reject) {
   (void)reject;  // Nothing here can fail.
   rnrlottie::ModelCacheController::clearModelCache();
   resolve(nil);
@@ -71,10 +82,9 @@ RCT_REMAP_METHOD(clearModelCache,
 // `getNativeVersion()` -> {rlottieCommit, modelCacheSize}. Promise-based (RN's
 // idiomatic shape for a native-module call that returns a value) even though
 // the work itself is synchronous and cannot fail — resolves immediately.
-RCT_REMAP_METHOD(getNativeVersion,
-                  getNativeVersionWithResolver
-                  : (RCTPromiseResolveBlock)resolve rejecter
-                  : (RCTPromiseRejectBlock)reject) {
+RCT_EXPORT_METHOD(getNativeVersion
+                   : (RCTPromiseResolveBlock)resolve reject
+                   : (RCTPromiseRejectBlock)reject) {
   (void)reject;  // Nothing here can fail.
   resolve(@{
     @"rlottieCommit" : [NSString stringWithUTF8String:rnrlottie::kRlottieCommit],

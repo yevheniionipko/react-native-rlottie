@@ -1,5 +1,7 @@
 require "json"
 
+require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
+
 package = JSON.parse(File.read(File.join(__dir__, "package.json")))
 
 # rlottie internal include roots (each rlottie subdir self-includes its own
@@ -64,19 +66,29 @@ Pod::Spec.new do |s|
   end
 
   # --- Shared C++ core + iOS adapter (Objective-C++) -------------------------
-  # C++17 (plan §1). Phase 1 fills in cpp/*, Phase 2 fills in ios/*. For now this
-  # carries the Chunk 0.3 link probe (cpp/spike/).
+  # Phase 1 fills in cpp/*, Phase 2 fills in ios/*. cpp/spike/ carries the
+  # Chunk 0.3 link probe. `ios/**/*.{h,m,mm}` already recurses into
+  # ios/fabric/ (Chunk 9.8's Fabric component view, guarded internally by
+  # #ifdef RCT_NEW_ARCH_ENABLED — see docs/new-architecture-design.md §1.4), so
+  # no separate glob is needed for it. No CLANG_CXX_LANGUAGE_STANDARD pin here
+  # (see the trailing install_modules_dependencies call).
   s.subspec "core" do |ss|
     ss.dependency "react-native-rlottie/rlottie"
     ss.source_files = "cpp/*.{h,hpp,cpp}",
                       "cpp/spike/*.{h,cpp}",
                       "ios/**/*.{h,m,mm}"
     ss.pod_target_xcconfig = {
-      "CLANG_CXX_LANGUAGE_STANDARD" => "c++17",
       "CLANG_CXX_LIBRARY" => "libc++",
       "HEADER_SEARCH_PATHS" => rlottie_header_search_paths,
     }
   end
 
   s.default_subspecs = "core"
+
+  # MUST be the last statement in the spec block: it reads then overwrites
+  # spec.compiler_flags and spec.pod_target_xcconfig (see
+  # node_modules/react-native/scripts/cocoapods/new_architecture.rb:76-104 and
+  # docs/new-architecture-design.md §1.4). Anything set on `s` after this call
+  # is lost.
+  install_modules_dependencies(s)
 end
