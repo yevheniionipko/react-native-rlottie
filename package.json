@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test:js": "tests/js/run-tests.sh",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

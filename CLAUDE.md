@@ -101,9 +101,22 @@ Known follow-ups (not defects in the above):
   3.3 passed through unvalidated. Any fixture pointing outside
   `filesDir`/`cacheDir`/`noBackupFilesDir` now gets `INVALID_SOURCE`.
 
-Next: **Phase 4** (the TypeScript API) — Phases 2 and 3 are complete. Chunk 4.1
-writes the TS types against `docs/bridge-contract.md`; note the error-union
-reconciliation flagged in `cpp/ErrorCode.h`.
+**Chunk 4.1 is complete** — `src/types.ts` (the public TS surface),
+`src/source.ts` (source normalization + cache keys), `src/sha256.ts`.
+
+- The `RlottieErrorCode` union is now **reconciled with `cpp/ErrorCode.h`**:
+  `INVALID_DIMENSIONS` and `RELEASED` added, `UNSUPPORTED_FEATURE` dropped
+  (nothing emits it). `ErrorCode.h` stays the source of truth — change it first.
+- Object sources are stringified **exactly once**, memoized on object identity
+  in a `WeakMap`. A caller who passes a fresh object literal every render
+  defeats that and re-stringifies + re-hashes on the JS thread.
+- Cache keys are content-addressed (`sha256(json):callerCacheKey`), so a caller
+  key can never alias two different payloads. SHA-256 is hand-rolled because the
+  package has zero runtime deps and RN has no sync crypto.
+
+Next: Chunks 4.2-4.4 (native component + commands, `RlottieView.tsx`, module and
+exports). 4.2 should prefer the string command path — see the iOS numeric-id
+fragility section in `docs/bridge-contract.md`.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty
@@ -114,8 +127,10 @@ placeholder — building it is Phase 4/5 work and needs a real device or emulato
 ```bash
 # JS/TS (needs `npm install` first)
 npm run typecheck        # tsc --noEmit
+npm run test:js          # source normalization + cache-key tests (no framework)
 npm run lint             # eslint src
-npm run format:check     # prettier --check
+npm run format:check     # prettier --check  (NOTE: several .md files at repo
+                         # root were already unformatted before Phase 4)
 
 # Shared C++ core tests — plain + ASan/UBSan + TSan variants.
 # Uses CMake+CTest when available; otherwise a direct clang fallback.

@@ -37,3 +37,6 @@ build/
 # Editor
 .vscode/
 *.swp
+
+# Compiled output of the JS logic tests (tests/js/run-tests.sh)
+tests/js/out/

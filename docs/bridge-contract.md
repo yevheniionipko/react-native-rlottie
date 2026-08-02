@@ -21,18 +21,18 @@ Android: `SimpleViewManager.getName()` returns `"RlottieView"`.
 
 Never renumber these; they are persisted in released JS bundles.
 
-| id | name | args |
-|----|------|------|
-| 1 | `play` | `[startFrame: int \| -1, endFrame: int \| -1]` — `-1` means "unset" |
-| 2 | `pause` | none |
-| 3 | `resume` | none |
-| 4 | `stop` | none |
-| 5 | `reset` | none |
-| 6 | `seekToProgress` | `[progress: double]` (0..1) |
-| 7 | `seekToFrame` | `[frame: int]` |
-| 8 | `setSpeed` | `[speed: double]` |
+| id  | name             | args                                                                |
+| --- | ---------------- | ------------------------------------------------------------------- |
+| 1   | `play`           | `[startFrame: int \| -1, endFrame: int \| -1]` — `-1` means "unset" |
+| 2   | `pause`          | none                                                                |
+| 3   | `resume`         | none                                                                |
+| 4   | `stop`           | none                                                                |
+| 5   | `reset`          | none                                                                |
+| 6   | `seekToProgress` | `[progress: double]` (0..1)                                         |
+| 7   | `seekToFrame`    | `[frame: int]`                                                      |
+| 8   | `setSpeed`       | `[speed: double]`                                                   |
 
-Both platforms **must** accept the command as an integer id *and* as the string
+Both platforms **must** accept the command as an integer id _and_ as the string
 name. RN changed `dispatchViewManagerCommand` from int to string ids across
 versions, and this library supports a range of them (plan §10) — so Android's
 `receiveCommand` must be overridden for both `Int` and `String`, and
@@ -71,14 +71,14 @@ integer.
 
 ## Events — direct events
 
-| event | payload |
-|-------|---------|
+| event               | payload                                                                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `onAnimationLoaded` | `{width: int, height: int, duration: double, frameRate: double, totalFrames: int, markers: [{name: string, startFrame: int, endFrame: int}]}` |
-| `onAnimationError` | `{code: string, message: string}` |
-| `onAnimationStart` | `{}` |
-| `onAnimationPause` | `{}` |
-| `onAnimationLoop` | `{}` |
-| `onAnimationFinish` | `{}` |
+| `onAnimationError`  | `{code: string, message: string}`                                                                                                             |
+| `onAnimationStart`  | `{}`                                                                                                                                          |
+| `onAnimationPause`  | `{}`                                                                                                                                          |
+| `onAnimationLoop`   | `{}`                                                                                                                                          |
+| `onAnimationFinish` | `{}`                                                                                                                                          |
 
 There is **no `onFrame` event**, by design (plan §11) — per-frame bridge traffic
 is the exact problem this library exists to avoid. Do not add one.
@@ -87,30 +87,33 @@ is the exact problem this library exists to avoid. Do not add one.
 `cpp/ErrorCode.h` — the one function both adapters map through. Do not re-map,
 re-case, or filter codes at the bridge layer.
 
-> Known gap for Chunk 4.1: `cpp/ErrorCode.h` emits `INVALID_DIMENSIONS` and
-> `RELEASED`, which plan §11's TS union does not list (it lists
-> `UNSUPPORTED_FEATURE`, which nothing emits). The TS union must be reconciled
-> with `ErrorCode.h`, not the other way round.
+> RESOLVED in Chunk 4.1. `cpp/ErrorCode.h` emits `INVALID_DIMENSIONS` and
+> `RELEASED`, which plan §11's draft TS union did not list, and lists
+> `UNSUPPORTED_FEATURE`, which nothing emits. `RlottieErrorCode` in
+> `src/types.ts` is now reconciled with `ErrorCode.h`: those two added,
+> `UNSUPPORTED_FEATURE` dropped. `NONE` stays out — it is the core's internal
+> "no error" sentinel and never reaches an error event. `ErrorCode.h` remains
+> the source of truth; update it first, then the TS union.
 
 No event may fire after the view is unmounted / dropped.
 
 ## Props
 
-| prop | type | notes |
-|------|------|-------|
-| `source` | object | `{json?: string, path?: string, cacheKey?: string, resourcePath?: string}` after resolution. Full resolution of bundled/asset/content URIs is Chunk 2.4/3.4 — see below. |
-| `autoPlay` | bool | default `false` |
-| `loop` | bool | default `false` |
-| `repeatCount` | int | `0` = infinite when `loop` |
-| `speed` | double | default `1.0`; negative plays in reverse |
-| `progress` | double | 0..1, seeks |
-| `startFrame` | int | default `0` |
-| `endFrame` | int | `0` = last frame |
-| `resizeMode` | string | `contain` \| `cover` \| `stretch` \| `center`; default `contain`. **iOS only so far** — maps to `layer.contentsGravity`; Android's `onDraw` still always stretches (accepted + validated, but a no-op). |
-| `renderScale` | double | default `1.0` |
-| `pauseWhenInactive` | bool | default `true` |
-| `cacheStrategy` | string | `none` \| `model`; default `model`. **iOS only so far** — plumbed into `useModelCache`; Android's source natives take no cache flag yet (Chunk 3.4). |
-| `colorOverrides` | array | `[{keyPath: string, color: string}]`, `color` as `#RRGGBB`/`#AARRGGBB`. Alpha is parsed but **discarded on both platforms** — `RenderCoordinator::setColor` has no alpha parameter. |
+| prop                | type   | notes                                                                                                                                                                                                   |
+| ------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`            | object | `{json?: string, path?: string, cacheKey?: string, resourcePath?: string}` after resolution. Full resolution of bundled/asset/content URIs is Chunk 2.4/3.4 — see below.                                |
+| `autoPlay`          | bool   | default `false`                                                                                                                                                                                         |
+| `loop`              | bool   | default `false`                                                                                                                                                                                         |
+| `repeatCount`       | int    | `0` = infinite when `loop`                                                                                                                                                                              |
+| `speed`             | double | default `1.0`; negative plays in reverse                                                                                                                                                                |
+| `progress`          | double | 0..1, seeks                                                                                                                                                                                             |
+| `startFrame`        | int    | default `0`                                                                                                                                                                                             |
+| `endFrame`          | int    | `0` = last frame                                                                                                                                                                                        |
+| `resizeMode`        | string | `contain` \| `cover` \| `stretch` \| `center`; default `contain`. **iOS only so far** — maps to `layer.contentsGravity`; Android's `onDraw` still always stretches (accepted + validated, but a no-op). |
+| `renderScale`       | double | default `1.0`                                                                                                                                                                                           |
+| `pauseWhenInactive` | bool   | default `true`                                                                                                                                                                                          |
+| `cacheStrategy`     | string | `none` \| `model`; default `model`. **iOS only so far** — plumbed into `useModelCache`; Android's source natives take no cache flag yet (Chunk 3.4).                                                    |
+| `colorOverrides`    | array  | `[{keyPath: string, color: string}]`, `color` as `#RRGGBB`/`#AARRGGBB`. Alpha is parsed but **discarded on both platforms** — `RenderCoordinator::setColor` has no alpha parameter.                     |
 
 Playback-shaping props (`loop`, `repeatCount`, `speed`, `startFrame`, `endFrame`,
 `autoPlay`) map onto the single native `configure(...)` call, so they must be
@@ -138,12 +141,12 @@ counterpart; that asymmetry is not intentional — iOS gets
 
 v1 accepts, per plan §3:
 
-| input | resolves to |
-|-------|-------------|
-| `{json: "<raw json string>", cacheKey}` | `setSourceData` |
-| `{uri: "file:///…"}` | `setSourceFile` after canonicalization |
-| `{uri: "content://…"}` (Android) | copy into app-private storage → `setSourceFile` |
-| `{uri: "asset:///<relative/path>"}` | bundled asset → `setSourceFile` |
+| input                                   | resolves to                                     |
+| --------------------------------------- | ----------------------------------------------- |
+| `{json: "<raw json string>", cacheKey}` | `setSourceData`                                 |
+| `{uri: "file:///…"}`                    | `setSourceFile` after canonicalization          |
+| `{uri: "content://…"}` (Android)        | copy into app-private storage → `setSourceFile` |
+| `{uri: "asset:///<relative/path>"}`     | bundled asset → `setSourceFile`                 |
 
 **The bundled-asset scheme is `asset://` on BOTH platforms.** It resolves
 against Android's `assets/` root (via `AssetManager`, copied into app-private
@@ -182,11 +185,11 @@ then, include `kRlottieVersion`'s commit and do not trust a bare caller key.
 Native module name `RlottieModule`, exposing **only** process-global operations
 (plan §15) — never per-view playback:
 
-| method | behaviour |
-|--------|-----------|
-| `configure({modelCacheSize})` | → `ModelCacheController::setModelCacheSize` |
-| `clearModelCache()` | → `ModelCacheController::clearModelCache` |
-| `getNativeVersion()` | → `{rlottieCommit: kRlottieCommit, modelCacheSize: int}` |
+| method                        | behaviour                                                |
+| ----------------------------- | -------------------------------------------------------- |
+| `configure({modelCacheSize})` | → `ModelCacheController::setModelCacheSize`              |
+| `clearModelCache()`           | → `ModelCacheController::clearModelCache`                |
+| `getNativeVersion()`          | → `{rlottieCommit: kRlottieCommit, modelCacheSize: int}` |
 
 **All three are Promise-based on both platforms** — the TS wrapper `await`s them.
 Do not make any of them fire-and-forget on one platform only: that would give
