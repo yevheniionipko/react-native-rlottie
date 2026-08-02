@@ -13,6 +13,13 @@
 #   tests/run-tests.sh fuzz         # ~20s bounded smoke run
 #   tests/run-tests.sh plain fuzz   # combine with the normal suite
 #
+# A fifth, OPT-IN variant, "bench" (Chunk 7.2), builds and runs
+# tests/cpp/bench_render.cpp — renderSync() vs rlottie's async
+# render()/std::future, unsanitized (a benchmark under ASan/TSan measures the
+# sanitizer, not rlottie). Also not part of the default variant list — see
+# docs/render-benchmark.md for methodology and results:
+#   tests/run-tests.sh bench        # ~10-20s, prints raw numbers
+#
 # Uses CMake + CTest when available; otherwise falls back to a direct clang
 # build with equivalent flags (so it runs without CMake installed).
 set -euo pipefail
@@ -92,13 +99,15 @@ run_fallback() {
   # (Chunk 5.5, built by run_fuzz_fallback): they don't define main() the way
   # test_harness.cpp does (fuzz_loadfromdata.cpp has none at all; the driver's
   # own main() would collide), so they're excluded from this glob.
+  # bench_render.cpp (Chunk 7.2, built by run_bench_fallback) defines its own
+  # main() too and is excluded for the same reason.
   for src in \
     "$ROOT"/cpp/RlottiePlayerCore.cpp "$ROOT"/cpp/FrameBuffer.cpp \
     "$ROOT"/cpp/PlaybackController.cpp "$ROOT"/cpp/RenderCoordinator.cpp \
     "$ROOT"/cpp/ModelCacheController.cpp \
     "$ROOT"/android/src/main/cpp/JniPlayerHandle.cpp \
     "$ROOT"/android/src/main/cpp/AndroidFrameSink.cpp \
-    $(find "$ROOT/tests/cpp" -maxdepth 1 -name '*.cpp' -not -name 'fuzz_*'); do
+    $(find "$ROOT/tests/cpp" -maxdepth 1 -name '*.cpp' -not -name 'fuzz_*' -not -name 'bench_*'); do
     o="$bdir/$(basename "$src").o"
     "$CXX" -std=c++17 -Wall -Wextra -Werror ${san[@]+"${san[@]}"} "${INC[@]}" \
       -DRNRLOTTIE_TEST_DATA_DIR="\"$ROOT/tests\"" -c "$src" -o "$o"
@@ -205,6 +214,40 @@ run_fuzz_fallback() {
   fi
 }
 
+# --- bench: build + run the Chunk 7.2 renderSync-vs-async benchmark --------
+run_bench_cmake() {
+  local bdir="$ROOT/build/tests-bench"
+  echo "== [cmake:bench] configure/build =="
+  cmake -S "$ROOT/tests/cpp" -B "$bdir" -DRNRLOTTIE_SANITIZE=off >/dev/null
+  cmake --build "$bdir" -j --target rnrlottie_bench_render >/dev/null
+  echo "== [cmake:bench] run =="
+  ( cd "$ROOT" && "$bdir/rnrlottie_bench_render" )
+}
+
+run_bench_fallback() {
+  local bdir="$ROOT/build/fallback-bench"
+  local rldir="$bdir/rlottie"
+  mkdir -p "$rldir"
+
+  if [ ! -f "$rldir/.done" ]; then
+    echo "== [clang:bench] compiling vendored rlottie =="
+    local i=0 f
+    while IFS= read -r f; do
+      "$CXX" -std=c++14 -fno-exceptions -fno-rtti -U__ARM_NEON__ -DNDEBUG -O2 \
+        "${INC[@]}" -c "$f" -o "$rldir/rl_$((i++)).o"
+    done < <(rlottie_srcs)
+    touch "$rldir/.done"
+  fi
+
+  echo "== [clang:bench] compiling bench entry point =="
+  "$CXX" -std=c++17 -Wall -Wextra -Werror -O2 "${INC[@]}" \
+    -DRNRLOTTIE_TEST_DATA_DIR="\"$ROOT/tests\"" \
+    -c "$ROOT/tests/cpp/bench_render.cpp" -o "$bdir/bench_render.cpp.o"
+  "$CXX" "$rldir"/rl_*.o "$bdir/bench_render.cpp.o" -o "$bdir/rnrlottie_bench_render" -lpthread
+  echo "== [clang:bench] run =="
+  ( cd "$ROOT" && "$bdir/rnrlottie_bench_render" )
+}
+
 status=0
 for v in "${VARIANTS[@]}"; do
   echo
@@ -214,6 +257,12 @@ for v in "${VARIANTS[@]}"; do
       run_fuzz_cmake || status=1
     else
       run_fuzz_fallback || status=1
+    fi
+  elif [ "$v" = "bench" ]; then
+    if command -v cmake >/dev/null 2>&1; then
+      run_bench_cmake || status=1
+    else
+      run_bench_fallback || status=1
     fi
   elif command -v cmake >/dev/null 2>&1; then
     run_cmake "$v" || status=1

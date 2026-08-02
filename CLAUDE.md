@@ -253,8 +253,32 @@ is `putDouble` on Android (JS numbers are doubles, exact to 2^53) — deferred
 because it changes a wire type the contract froze as `int`, which is worth a
 deliberate decision rather than a late unilateral edit.
 
-Next: Chunks 7.2 (`renderSync` benchmark), 7.3 (lifecycle stress + leak tests),
-7.4 (on-device golden verification), then Phase 8.
+**Chunk 7.2 is complete — and the outcome is "change nothing."** See
+`docs/render-benchmark.md`. The render path (`RenderCoordinator`,
+`RlottiePlayerCore`) was deliberately not touched; the chunk's deliverable is
+evidence plus a decision, per plan §5's "switch only on measurable benefit".
+
+- Measured on the representative fixture, `renderSync()` and rlottie's async
+  `render()`/`std::future` are within ~1-3% at 128²/512²/1080² — noise. Async
+  carries a fixed dispatch tax that only amortizes on expensive frames. A shared
+  pool is ~4-10% faster across 2/4/8 simulated views.
+- **Adopting async is not just unprofitable, it is partly unsafe**:
+  `AnimationImpl::renderAsync` reuses a single `mTask` and overwrites its
+  promise/future/frame/surface on every call
+  (`cpp/third_party/rlottie/.../lottieanimation.cpp`), so issuing a second
+  render on one `Animation` before the prior future resolves races the pool
+  thread. Since each core owns one `Animation`, single-view pipelining via that
+  API isn't available at all. Verified by reading the vendored source.
+- Owning the worker is what makes generation cancellation, single-in-flight
+  latest-frame-wins, destruction ordering, and "no callback after destroy"
+  emergent rather than hand-built. A ~4-10% off-device delta does not buy that.
+- `tests/run-tests.sh bench` is opt-in and excluded from the default gate.
+
+**These are development-Mac numbers and are NOT device-validated** — that is
+Chunk 7.4's job, and the doc says so prominently.
+
+Next: 7.3 (lifecycle stress + leak tests), 7.4 (on-device golden verification),
+then Phase 8.
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty

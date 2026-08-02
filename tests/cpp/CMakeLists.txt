@@ -46,8 +46,10 @@ endif()
 file(GLOB TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 # fuzz_loadfromdata.cpp defines ONLY LLVMFuzzerTestOneInput (no main()) — it is
 # a separate libFuzzer binary (Chunk 5.5, target below), never part of the
-# CHECK/TEST binary built from TEST_SOURCES.
+# CHECK/TEST binary built from TEST_SOURCES. bench_render.cpp (Chunk 7.2) is
+# likewise a separate opt-in binary with its own main() (target below).
 list(FILTER TEST_SOURCES EXCLUDE REGEX "/fuzz_[^/]*\\.cpp$")
+list(FILTER TEST_SOURCES EXCLUDE REGEX "/bench_[^/]*\\.cpp$")
 
 add_executable(rnrlottie_tests
   ${TEST_SOURCES}
@@ -93,3 +95,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_link_options(rnrlottie_fuzz_loadfromdata PRIVATE ${FUZZ_FLAGS})
   target_link_libraries(rnrlottie_fuzz_loadfromdata PRIVATE rlottie::rlottie)
 endif()
+
+# --- Chunk 7.2: renderSync() vs rlottie async render()/std::future bench ----
+#
+# Opt-in, unsanitized (a benchmark under ASan/TSan measures the sanitizer, not
+# rlottie), NOT added to `add_test` / the default `ctest` run — see
+# run-tests.sh's `bench` variant and docs/render-benchmark.md.
+add_executable(rnrlottie_bench_render bench_render.cpp)
+target_include_directories(rnrlottie_bench_render PRIVATE ${REPO}/cpp)
+target_compile_definitions(rnrlottie_bench_render PRIVATE
+  RNRLOTTIE_TEST_DATA_DIR="${REPO}/tests")
+target_compile_options(rnrlottie_bench_render PRIVATE -Wall -Wextra -O2)
+target_link_libraries(rnrlottie_bench_render PRIVATE rlottie::rlottie)
