@@ -507,6 +507,16 @@ spike) gates everything** — verify rlottie's ARGB32-premultiplied output,
 channel order, and stride render correctly on both platforms before building
 real playback (§8).
 
+## Documentation conventions
+
+**Describe changes in `.md` files, not in code comments.** Design rationale,
+trade-offs, traps, and verification notes belong in `docs/` (and this file) —
+not in comment headers or multi-line blocks inside source files. Keep code
+comments minimal and only where they help a reader of that specific line;
+match the surrounding file's existing comment density rather than exceeding
+it. Where a pointer is genuinely useful, reference the doc section
+(e.g. "see docs/new-architecture-design.md §3.2.3") instead of restating it.
+
 ## Specialized agents
 
 Delegate to the agents in `.claude/agents/` according to their domain:

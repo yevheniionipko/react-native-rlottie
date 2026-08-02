@@ -107,10 +107,6 @@ require_one "src/index.ts"                      '^src/index\.ts$'
 require_one "src/RlottieView.tsx"               '^src/RlottieView\.tsx$'
 require_one "src/types.ts"                      '^src/types\.ts$'
 
-# Chunk 9.1 — the New Architecture codegen input. A package missing these
-# produces a codegen no-op in the consumer: no build error, just a component
-# that "isn't found" or a TurboModule that resolves to null, far from this
-# cause. `codegenConfig.jsSrcsDir` in package.json points here.
 require_one "codegen spec: src/specs/RlottieViewNativeComponent.ts" '^src/specs/RlottieViewNativeComponent\.ts$'
 require_one "codegen spec: src/specs/NativeRlottieModule.ts"        '^src/specs/NativeRlottieModule\.ts$'
 
