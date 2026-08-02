@@ -40,6 +40,8 @@ export type {
   RlottieResizeMode,
   RlottieCacheStrategy,
   RlottieColorOverride,
+  RlottieOpacityOverride,
+  RlottieStrokeWidthOverride,
   // Imperative ref
   RlottieViewRef,
   RlottiePlayOptions,

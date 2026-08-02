@@ -13,7 +13,7 @@ import java.util.WeakHashMap
 /**
  * Chunk 3.3 — the `SimpleViewManager` half of the frozen bridge contract
  * (`docs/bridge-contract.md`), which this file must match byte-for-byte with
- * `ios/RNRlottieViewManager.mm`: prop names/defaults, the eight numeric
+ * `ios/RNRlottieViewManager.mm`: prop names/defaults, the nine numeric
  * command ids, and the six direct-event names/payload shapes.
  *
  * This class is deliberately thin: it owns no playback logic, only
@@ -320,6 +320,54 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         return floatArrayOf(r, g, b)
     }
 
+    // --- Props: Phase 6 dynamic properties (docs/bridge-contract.md's "Phase 6
+    // additions") ----------------------------------------------------------------
+    //
+    // Parallel in shape to `colorOverrides` above, deliberately not merged into
+    // one polymorphic array (see the contract). Applied immediately, same as
+    // `colorOverrides` — each entry is an independent, idempotent native call.
+    // A malformed entry (missing key, wrong type, non-finite number) is
+    // skipped rather than crashing the whole prop apply; out-of-range-but-
+    // finite values (e.g. opacity 5.0, width -3.0) are passed through and
+    // clamped natively (RenderCoordinator::setOpacity/setStrokeWidth), not
+    // rejected here — mirrors iOS's RNRlottieFiniteNumber/RCT_CUSTOM_VIEW_PROPERTY
+    // handling exactly.
+
+    @ReactProp(name = "opacityOverrides")
+    fun setOpacityOverrides(view: RlottieView, value: ReadableArray?) {
+        if (value == null) return
+        for (i in 0 until value.size()) {
+            val entry = value.getMap(i) ?: continue
+            val keyPath = stringOrNull(entry, "keyPath") ?: continue
+            val opacity = finiteDoubleOrNull(entry, "opacity") ?: continue
+            view.setOpacity(keyPath, opacity.toFloat())
+        }
+    }
+
+    @ReactProp(name = "strokeWidthOverrides")
+    fun setStrokeWidthOverrides(view: RlottieView, value: ReadableArray?) {
+        if (value == null) return
+        for (i in 0 until value.size()) {
+            val entry = value.getMap(i) ?: continue
+            val keyPath = stringOrNull(entry, "keyPath") ?: continue
+            val width = finiteDoubleOrNull(entry, "width") ?: continue
+            view.setStrokeWidth(keyPath, width.toFloat())
+        }
+    }
+
+    /**
+     * Reads [key] as a finite `Double`, or `null` for a missing key, a
+     * non-numeric type, or a non-finite value (NaN/Infinity) — the same
+     * defensive checks iOS's `RNRlottieFiniteNumber` applies, so a malformed
+     * override entry never crashes a render on either platform.
+     */
+    private fun finiteDoubleOrNull(map: ReadableMap, key: String): Double? {
+        if (!map.hasKey(key) || map.isNull(key)) return null
+        if (map.getType(key) != com.facebook.react.bridge.ReadableType.Number) return null
+        val v = map.getDouble(key)
+        return if (v.isFinite()) v else null
+    }
+
     // --- Commands -----------------------------------------------------------------
     //
     // RN's `dispatchViewManagerCommand` has shipped both int- and string-keyed
@@ -338,6 +386,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         builder.put("seekToProgress", COMMAND_SEEK_TO_PROGRESS)
         builder.put("seekToFrame", COMMAND_SEEK_TO_FRAME)
         builder.put("setSpeed", COMMAND_SET_SPEED)
+        builder.put("playMarker", COMMAND_PLAY_MARKER)
         return builder.build()
     }
 
@@ -377,6 +426,12 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
                 val speed = args?.let { if (it.size() > 0) it.getDouble(0) else null } ?: return
                 view.setSpeed(speed)
             }
+            COMMAND_PLAY_MARKER -> {
+                val name = args?.let { if (it.size() > 0) it.getString(0) else null } ?: return
+                // Return value intentionally ignored — an unknown marker is a
+                // silent no-op per docs/bridge-contract.md, not an error/event.
+                view.playMarker(name)
+            }
         }
     }
 
@@ -404,6 +459,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
         const val COMMAND_SEEK_TO_PROGRESS = 6
         const val COMMAND_SEEK_TO_FRAME = 7
         const val COMMAND_SET_SPEED = 8
+        const val COMMAND_PLAY_MARKER = 9
 
         const val NO_OVERRIDE = -1
 
@@ -416,6 +472,7 @@ class RlottieViewManager : SimpleViewManager<RlottieView>() {
             "seekToProgress" to COMMAND_SEEK_TO_PROGRESS,
             "seekToFrame" to COMMAND_SEEK_TO_FRAME,
             "setSpeed" to COMMAND_SET_SPEED,
+            "playMarker" to COMMAND_PLAY_MARKER,
         )
 
         const val DEFAULT_RESIZE_MODE = "contain"

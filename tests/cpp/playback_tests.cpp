@@ -1,4 +1,6 @@
 // Chunk 1.7 — PlaybackController state machine + timing (synthetic clock).
+#include <algorithm>
+
 #include "PlaybackController.h"
 #include "test_harness.h"
 
@@ -13,6 +15,19 @@ AnimationMetadata meta(double fps, std::size_t total) {
     m.frameRate = fps;
     m.totalFrames = total;
     m.duration = total / fps;
+    return m;
+}
+
+// totalFrames=11 => valid frame indices [0,10], matching `meta()` above.
+AnimationMetadata metaWithMarkers(double fps, std::size_t total) {
+    AnimationMetadata m = meta(fps, total);
+    m.markers = {
+        Marker{"intro", 0, 2},
+        Marker{"loopSeg", 3, 6},
+        Marker{"outro", 7, 10},
+        Marker{"outOfRange", 5, 999},   // end beyond totalFrames-1: must clamp
+        Marker{"degenerate", 9, 4},     // end < start: must clamp to start
+    };
     return m;
 }
 
@@ -157,4 +172,112 @@ TEST(playback_load_failure_inert) {
     CHECK(pc.state() == PlaybackState::Failed);
     pc.play(std::nullopt, std::nullopt);
     CHECK(pc.state() == PlaybackState::Failed);
+}
+
+// --- Chunk 6.2 — marker resolution ------------------------------------------
+
+TEST(playback_marker_selects_segment) {
+    PlaybackController pc;
+    pc.onLoaded(metaWithMarkers(10, 11));
+    CHECK(pc.playMarker("loopSeg"));
+    CHECK(pc.state() == PlaybackState::Playing);
+    std::size_t minF = 99, maxF = 0;
+    for (int i = 0; i <= 100; ++i) {
+        auto tk = pc.advance(i / 100.0 * 0.5);
+        if (tk.frame < minF) minF = tk.frame;
+        if (tk.frame > maxF) maxF = tk.frame;
+    }
+    CHECK(minF >= 3 && maxF == 6);
+}
+
+TEST(playback_marker_unknown_name_no_op) {
+    PlaybackController pc;
+    pc.onLoaded(metaWithMarkers(10, 11));
+    CHECK(pc.state() == PlaybackState::Ready);
+    CHECK(!pc.playMarker("doesNotExist"));
+    CHECK(pc.state() == PlaybackState::Ready);  // unchanged
+    CHECK(pc.advance(0.0).frame == 0);           // still at the config's start
+}
+
+TEST(playback_marker_empty_name_no_op) {
+    PlaybackController pc;
+    pc.onLoaded(metaWithMarkers(10, 11));
+    CHECK(!pc.playMarker(""));
+    CHECK(pc.state() == PlaybackState::Ready);
+}
+
+TEST(playback_marker_before_metadata_loaded_no_op) {
+    PlaybackController pc;  // never onLoaded()
+    CHECK(!pc.playMarker("intro"));
+    CHECK(pc.state() == PlaybackState::Empty);
+}
+
+TEST(playback_marker_out_of_range_end_clamps) {
+    PlaybackController pc;
+    pc.onLoaded(metaWithMarkers(10, 11));  // valid frames [0,10]
+    CHECK(pc.playMarker("outOfRange"));    // source says end=999
+    std::size_t maxF = 0;
+    for (int i = 0; i <= 100; ++i) {
+        maxF = std::max(maxF, pc.advance(i / 100.0 * 0.5).frame);
+    }
+    CHECK(maxF <= 10);  // never renders past the last real frame
+}
+
+TEST(playback_marker_degenerate_range_clamps_to_start) {
+    PlaybackController pc;
+    pc.onLoaded(metaWithMarkers(10, 11));
+    CHECK(pc.playMarker("degenerate"));  // source says start=9, end=4
+    auto d = drive(pc, 0.0, 0.05, 5);
+    CHECK(d.lastFrame == 9);  // collapses to a single-frame segment at start
+}
+
+TEST(playback_marker_is_one_off_does_not_leak_into_plain_play) {
+    PlaybackController pc;
+    PlaybackConfig c;
+    c.startFrame = 0;
+    c.endFrame = 10;  // full persistent range
+    pc.configure(c);
+    pc.onLoaded(metaWithMarkers(10, 11));
+
+    CHECK(pc.playMarker("loopSeg"));  // one-off [3,6]
+    std::size_t markerMax = 0;
+    for (int i = 0; i <= 20; ++i) {
+        markerMax = std::max(markerMax, pc.advance(i / 20.0 * 0.4).frame);
+    }
+    CHECK(markerMax == 6);  // confirms the marker segment was actually active
+
+    // A later argument-less play() must resolve the PERSISTENT config's full
+    // range again, not the marker's [3,6] segment.
+    pc.play(std::nullopt, std::nullopt);
+    std::size_t minF = 99, maxF = 0;
+    for (int i = 0; i <= 200; ++i) {
+        auto tk = pc.advance(i / 200.0 * 1.1);
+        minF = std::min(minF, tk.frame);
+        maxF = std::max(maxF, tk.frame);
+    }
+    CHECK(minF == 0);
+    CHECK(maxF == 10);
+}
+
+TEST(playback_explicit_play_range_is_one_off_does_not_leak) {
+    PlaybackController pc;
+    PlaybackConfig c;
+    c.startFrame = 0;
+    c.endFrame = 10;
+    pc.configure(c);
+    pc.onLoaded(meta(10, 11));
+
+    pc.play(std::size_t{3}, std::size_t{6});  // one-off override
+    std::size_t overrideMax = 0;
+    for (int i = 0; i <= 20; ++i) {
+        overrideMax = std::max(overrideMax, pc.advance(i / 20.0 * 0.4).frame);
+    }
+    CHECK(overrideMax == 6);
+
+    pc.play(std::nullopt, std::nullopt);  // must NOT still be pinned to [3,6]
+    std::size_t maxF = 0;
+    for (int i = 0; i <= 200; ++i) {
+        maxF = std::max(maxF, pc.advance(i / 200.0 * 1.1).frame);
+    }
+    CHECK(maxF == 10);
 }

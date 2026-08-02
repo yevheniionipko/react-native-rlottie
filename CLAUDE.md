@@ -192,7 +192,38 @@ Known gaps, deliberately not closed:
   no key), so two different files at one path collide. Documented in
   `cpp/CacheKey.h` and `src/source.ts`.
 
-Next: **Phase 6** (dynamic properties) and **Phase 7** (performance/stability).
+**Phase 6 is complete** (6.1 dynamic properties, 6.2 marker playback).
+
+- `opacityOverrides` / `strokeWidthOverrides` join `colorOverrides`, and
+  `playMarker` is **command id 9**. Commands are now **append-only**: on iOS the
+  integer id is a raw declaration index, so a new command must be declared LAST
+  in `RNRlottieViewManager.mm`. Current order (verify after any edit):
+  `__reservedCommandSlot0 play pause resume stop reset seekToProgress
+  seekToFrame setSpeed playMarker`.
+- All three override setters route through `RenderCoordinator`'s control queue
+  and are applied on the render worker — never from the caller thread (plan §6).
+- `play({marker})` wins over `startFrame`/`endFrame` rather than merging.
+
+**A real bug was found and fixed here**: `PlaybackController::play(start, end)`
+was persisting its supposedly one-off range into `config_`, so a later
+argument-less `play()` inherited it — contradicting what the contract already
+claimed and what the JNI/Obj-C plumbing appeared to guarantee. The `-1`→
+`nullopt` marshalling was correct all along; the leak was one layer deeper, in
+the controller. `play()` now re-derives from the persistent config via
+`resolveSegment()` before applying an override. Both no-leak cases are
+regression-tested (`playback_*_is_one_off_does_not_leak*`).
+
+Known limitations (documented at the call sites, not defects):
+
+- `setOpacity` uses rlottie's `FillOpacity`, so a **stroke-only shape's opacity
+  override has no effect** — rlottie has no single fill+stroke opacity property,
+  and `setColor` already had the same fill-only scope.
+- This vendored rlottie skips re-evaluating a layer's paint on repeat renders
+  when the layer has no animated keyframes, so a `setValue()` override added
+  afterwards may not take effect. Pre-existing engine behaviour that equally
+  affects the shipped `setColor`; noted in `tests/cpp/core_tests.cpp`.
+
+Next: **Phase 7** (performance & stability).
 
 Not done, and out of reach in a headless environment: the plan's "example app
 runs on device + emulator" for Chunk 3.5. `example/` is still an empty

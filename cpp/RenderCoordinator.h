@@ -54,6 +54,12 @@ public:
     void requestFrame(std::size_t frame, std::uint64_t generation);
 
     void setColor(std::string keyPath, float red, float green, float blue);
+    // Chunk 6.1 — same routing/generation-gating shape as setColor: enqueued
+    // onto the control queue, gated on the source epoch captured at call time
+    // so a stale keyPath belonging to a replaced source is dropped rather than
+    // applied to the new animation.
+    void setOpacity(std::string keyPath, float opacity);
+    void setStrokeWidth(std::string keyPath, float width);
 
     // Invalidate in-flight work (bumps generation, clears the pending slot).
     void reset();
@@ -71,6 +77,8 @@ private:
     void runRender(std::size_t frame, std::uint64_t generation);
     void runSetColor(std::string keyPath, float r, float g, float b,
                      std::uint64_t sourceEpoch);
+    void runSetOpacity(std::string keyPath, float opacity, std::uint64_t sourceEpoch);
+    void runSetStrokeWidth(std::string keyPath, float width, std::uint64_t sourceEpoch);
 
     FrameSink& sink_;
     FrameBuffer frameBuffer_;
@@ -84,7 +92,8 @@ private:
 
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::deque<std::function<void()>> controlQueue_;  // load/resize/setColor
+    // load/resize/setColor/setOpacity/setStrokeWidth
+    std::deque<std::function<void()>> controlQueue_;
     std::optional<std::size_t> pendingFrame_;         // latest-wins render slot
     std::uint64_t pendingGeneration_ = 0;
     bool stop_ = false;

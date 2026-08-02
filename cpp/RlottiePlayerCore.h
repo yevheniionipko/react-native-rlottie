@@ -54,8 +54,21 @@ public:
                      std::size_t bytesPerLine, bool preserveAspectRatio);
 
     // Overrides a fill color by key path. Colors are 0..1. No-op if not loaded.
-    // Extended to stroke/opacity in Phase 6.
     void setColor(const std::string& keyPath, float red, float green, float blue);
+
+    // Chunk 6.1 — overrides FILL opacity by key path (parallel in scope to
+    // setColor, which is FillColor-only, not FillColor+StrokeColor). A
+    // stroke-opacity override is NOT exposed by this API; see
+    // RlottiePlayerCore.cpp for the rationale. `opacity` is 0..1 and clamped
+    // (NaN clamps to 0) before being mapped to rlottie's 0..100 range. No-op
+    // if not loaded.
+    void setOpacity(const std::string& keyPath, float opacity);
+
+    // Chunk 6.1 — overrides stroke width by key path. `width` is clamped to a
+    // strictly positive minimum (NaN/<=0 clamp up) since rlottie has no
+    // documented valid range and a zero/negative width has no sane visual
+    // meaning. No-op if not loaded.
+    void setStrokeWidth(const std::string& keyPath, float width);
 
     AnimationMetadata metadata() const;  // valid after a successful load
     std::size_t frameForProgress(double progress) const;  // clamps progress to [0,1]

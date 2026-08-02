@@ -235,6 +235,31 @@ class RlottieView @JvmOverloads constructor(
         if (h != 0L) RlottieBridge.nativeSetColor(h, keyPath, r, g, b)
     }
 
+    /** Backs the `opacityOverrides` prop; opacity 0..1, clamped natively out of range. */
+    fun setOpacity(keyPath: String, opacity: Float) {
+        val h = handle
+        if (h != 0L) RlottieBridge.nativeSetOpacity(h, keyPath, opacity)
+    }
+
+    /** Backs the `strokeWidthOverrides` prop; width in px, clamped natively out of range. */
+    fun setStrokeWidth(keyPath: String, width: Float) {
+        val h = handle
+        if (h != 0L) RlottieBridge.nativeSetStrokeWidth(h, keyPath, width)
+    }
+
+    /**
+     * Backs command id 9 (`playMarker`) — a one-off segment override for this
+     * play only, exactly like [play]'s startFrame/endFrame; it does not touch
+     * [configure]'s persisted range. A no-op (returns false, no exception)
+     * when there is no live handle or the marker name is unknown, mirroring
+     * how commands to an unmounted view are dropped silently. Return value is
+     * informational only — RlottieViewManager ignores it per the contract.
+     */
+    fun playMarker(name: String): Boolean {
+        val h = handle
+        return h != 0L && RlottieBridge.nativePlayMarker(h, name)
+    }
+
     /**
      * Stops the Choreographer callback, destroys the native handle (idempotent
      * there too), zeroes it, and frees the Bitmaps. Safe to call twice — the

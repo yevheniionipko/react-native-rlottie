@@ -14,7 +14,9 @@ import type {
   RlottieErrorEvent,
   RlottieLifecycleEvent,
   RlottieLoadedEvent,
+  RlottieOpacityOverride,
   RlottieResizeMode,
+  RlottieStrokeWidthOverride,
 } from './types';
 
 import type {NativeSyntheticEvent} from 'react-native';
@@ -46,6 +48,8 @@ export interface RlottieNativeProps extends ViewProps {
   pauseWhenInactive?: boolean;
   cacheStrategy?: RlottieCacheStrategy;
   colorOverrides?: RlottieColorOverride[];
+  opacityOverrides?: RlottieOpacityOverride[];
+  strokeWidthOverrides?: RlottieStrokeWidthOverride[];
 
   onAnimationLoaded?: (event: NativeSyntheticEvent<RlottieLoadedEvent>) => void;
   onAnimationError?: (event: NativeSyntheticEvent<RlottieErrorEvent>) => void;

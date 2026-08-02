@@ -67,6 +67,14 @@ typedef void (^RNRlottieFrameBlock)(void);
 - (void)seekToProgress:(double)progress;
 - (void)setSpeed:(double)speed;
 
+// Phase 6 — plays the frame segment of a named marker (markers come from the
+// Lottie source's metadata, already delivered via -onLoaded). A one-off
+// segment override for this play only, exactly like -playFromFrame:toFrame:
+// — it must not be written into the persistent PlaybackConfig. Returns NO
+// (a silent no-op, not an error/event) for an unknown marker name, mirroring
+// rnrlottie::PlaybackController::playMarker.
+- (BOOL)playMarker:(NSString *)name;
+
 // Overrides a fill color by Lottie key path (JS `colorOverrides` prop, Chunk
 // 2.3). Components are 0..1; no-op if the animation isn't loaded yet or the
 // key path doesn't resolve (rnrlottie::RenderCoordinator::setColor).
@@ -74,6 +82,15 @@ typedef void (^RNRlottieFrameBlock)(void);
                         red:(double)red
                       green:(double)green
                        blue:(double)blue;
+
+// Phase 6 — overrides an opacity (0..1) / stroke width (px) by Lottie key
+// path (JS `opacityOverrides` / `strokeWidthOverrides` props). Out-of-range
+// values are clamped natively (rnrlottie::RenderCoordinator::setOpacity /
+// setStrokeWidth), not rejected here — see docs/bridge-contract.md's "Phase 6
+// additions". No-op if the animation isn't loaded yet or the key path doesn't
+// resolve.
+- (void)setOpacityForKeyPath:(NSString *)keyPath opacity:(double)opacity;
+- (void)setStrokeWidthForKeyPath:(NSString *)keyPath width:(double)width;
 
 // Physical pixel dimensions of the render surface.
 - (void)setSurfaceWidth:(size_t)width height:(size_t)height;

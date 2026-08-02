@@ -120,6 +120,90 @@ TEST(coord_teardown_during_render_stress) {
     }  // dtor -> release(): cancel, destroy core on worker, join
 }
 
+// Chunk 6.1 — setOpacity/setStrokeWidth must be routed through the SAME
+// control-queue/worker mechanism as setColor (never touching core_ from the
+// caller thread). Structural proof: RenderCoordinator::setOpacity/
+// setStrokeWidth enqueue onto controlQueue_ exactly like setColor (see
+// RenderCoordinator.cpp) and are only ever invoked from workerLoop(). This
+// test exercises that path end to end (enqueue -> worker applies -> a render
+// still succeeds) and, combined with coord_setters_concurrent_stress below,
+// gives TSan a real chance to catch a routing mistake.
+TEST(coord_opacity_strokewidth_route_through_worker) {
+    TestSink s;
+    RenderCoordinator rc(s, kLimits);
+    rc.setSurfaceSize(64, 64);
+    rc.setSource(dataSource(fixture()));
+    CHECK(s.waitFor([&] { return s.loaded >= 1; }));
+    rc.setOpacity("**", 0.5f);
+    rc.setStrokeWidth("**", 3.0f);
+    rc.requestFrame(0, rc.generation());
+    CHECK(s.waitFor([&] { return s.published >= 1; }));
+    CHECK(s.errors == 0);
+}
+
+// Chunk 6.2 — hammer setColor/setOpacity/setStrokeWidth from multiple threads
+// concurrently with rendering and structural changes. Must be clean under
+// TSan: every setter call touches core_ only via the worker (RenderCoordinator
+// invariant, CLAUDE.md), so no data race should be observable regardless of
+// timing.
+TEST(coord_setters_concurrent_stress) {
+    TestSink s;
+    RenderCoordinator rc(s, kLimits);
+    std::atomic<bool> run{true};
+    const std::string json = fixture();
+
+    std::thread tRender([&] {
+        std::size_t f = 0;
+        while (run.load()) rc.requestFrame((f++) % 31, rc.generation());
+    });
+    std::thread tColor([&] {
+        float g = 0.0f;
+        while (run.load()) {
+            rc.setColor("**", g, 1.0f - g, 0.5f);
+            g = g > 1.0f ? 0.0f : g + 0.05f;
+        }
+    });
+    std::thread tOpacity([&] {
+        float o = 0.0f;
+        while (run.load()) {
+            rc.setOpacity("**", o);
+            o = o > 1.2f ? -0.2f : o + 0.05f;  // sweeps past the clamp bounds
+        }
+    });
+    std::thread tStroke([&] {
+        float w = -1.0f;
+        while (run.load()) {
+            rc.setStrokeWidth("**", w);
+            w = w > 5.0f ? -1.0f : w + 0.2f;  // sweeps past the clamp bound
+        }
+    });
+    std::thread tSize([&] {
+        std::size_t d = 0;
+        while (run.load()) {
+            rc.setSurfaceSize(32 + (d % 64), 32 + (d % 64));
+            ++d;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    std::thread tSource([&] {
+        while (run.load()) {
+            rc.setSource(dataSource(json));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    run.store(false);
+    tRender.join();
+    tColor.join();
+    tOpacity.join();
+    tStroke.join();
+    tSize.join();
+    tSource.join();
+    rc.release();
+    CHECK(s.monotonic);
+}
+
 TEST(coord_concurrent_api_monotonic) {
     TestSink s;
     RenderCoordinator rc(s, kLimits);

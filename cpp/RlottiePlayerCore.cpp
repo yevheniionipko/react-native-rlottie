@@ -209,6 +209,49 @@ void RlottiePlayerCore::setColor(const std::string& keyPath, float red, float gr
                                                        rlottie::Color(red, green, blue));
 }
 
+namespace {
+// rlottie has no documented valid range for Property::StrokeWidth (unlike the
+// opacity properties, which are explicitly [0,100] in rlottie.h); zero/negative
+// widths have no sane visual meaning, so clamp to a small strictly-positive
+// floor rather than accepting them verbatim.
+constexpr float kMinStrokeWidth = 0.01f;
+}  // namespace
+
+void RlottiePlayerCore::setOpacity(const std::string& keyPath, float opacity) {
+    if (!animation_) {
+        return;
+    }
+    // `!(opacity >= 0.0f)` also catches NaN (every comparison with NaN is
+    // false, so the negation is true), unlike `opacity < 0.0f` which would let
+    // NaN through unclamped.
+    if (!(opacity >= 0.0f)) {
+        opacity = 0.0f;
+    } else if (opacity > 1.0f) {
+        opacity = 1.0f;
+    }
+    // rlottie::Property::FillOpacity: "Opacity property of Fill object, value
+    // type is float [0..100]" (rlottie.h). This targets fill opacity only, the
+    // same scope setColor already has (FillColor, not StrokeColor) — there is
+    // no single rlottie property that scales overall (fill+stroke) opacity, so
+    // exposing one setOpacity() means picking a side. Fill was chosen for
+    // parity with setColor. LIMITATION: an override on a stroke-only shape
+    // (fill-less) has no visible effect; a future setStrokeOpacity() would be
+    // a separate, additive API if that gap needs closing.
+    animation_->setValue<rlottie::Property::FillOpacity>(keyPath, opacity * 100.0f);
+}
+
+void RlottiePlayerCore::setStrokeWidth(const std::string& keyPath, float width) {
+    if (!animation_) {
+        return;
+    }
+    // Same NaN-safe clamp shape as setOpacity: `!(width > kMinStrokeWidth)` is
+    // true for NaN, negatives, zero, and anything at/below the floor.
+    if (!(width > kMinStrokeWidth)) {
+        width = kMinStrokeWidth;
+    }
+    animation_->setValue<rlottie::Property::StrokeWidth>(keyPath, width);
+}
+
 AnimationMetadata RlottiePlayerCore::metadata() const { return metadata_; }
 
 std::size_t RlottiePlayerCore::frameForProgress(double progress) const {

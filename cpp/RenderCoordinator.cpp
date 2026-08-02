@@ -66,6 +66,30 @@ void RenderCoordinator::setColor(std::string keyPath, float red, float green, fl
     cv_.notify_one();
 }
 
+void RenderCoordinator::setOpacity(std::string keyPath, float opacity) {
+    const std::uint64_t epoch = sourceEpoch_.load(std::memory_order_acquire);
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (stop_) return;
+        controlQueue_.push_back([this, k = std::move(keyPath), opacity, epoch]() mutable {
+            runSetOpacity(std::move(k), opacity, epoch);
+        });
+    }
+    cv_.notify_one();
+}
+
+void RenderCoordinator::setStrokeWidth(std::string keyPath, float width) {
+    const std::uint64_t epoch = sourceEpoch_.load(std::memory_order_acquire);
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (stop_) return;
+        controlQueue_.push_back([this, k = std::move(keyPath), width, epoch]() mutable {
+            runSetStrokeWidth(std::move(k), width, epoch);
+        });
+    }
+    cv_.notify_one();
+}
+
 void RenderCoordinator::reset() {
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -207,6 +231,22 @@ void RenderCoordinator::runSetColor(std::string keyPath, float r, float g, float
         return;  // the color keypath belongs to a source that has been replaced
     }
     core_->setColor(keyPath, r, g, b);
+}
+
+void RenderCoordinator::runSetOpacity(std::string keyPath, float opacity,
+                                      std::uint64_t sourceEpoch) {
+    if (sourceEpoch != sourceEpoch_.load(std::memory_order_acquire)) {
+        return;  // the keypath belongs to a source that has been replaced
+    }
+    core_->setOpacity(keyPath, opacity);
+}
+
+void RenderCoordinator::runSetStrokeWidth(std::string keyPath, float width,
+                                          std::uint64_t sourceEpoch) {
+    if (sourceEpoch != sourceEpoch_.load(std::memory_order_acquire)) {
+        return;  // the keypath belongs to a source that has been replaced
+    }
+    core_->setStrokeWidth(keyPath, width);
 }
 
 }  // namespace rnrlottie

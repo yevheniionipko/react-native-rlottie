@@ -248,6 +248,14 @@ NSString *ToNSString(const std::string &s) {
     _playback.setSpeed(speed);
 }
 
+- (BOOL)playMarker:(NSString *)name {
+    if (_torndown || name.length == 0) {
+        return NO;
+    }
+    // [UI]-only, matching every other transport command above.
+    return _playback.playMarker(std::string(name.UTF8String ?: "")) ? YES : NO;
+}
+
 - (void)setColorForKeyPath:(NSString *)keyPath
                         red:(double)red
                       green:(double)green
@@ -259,6 +267,22 @@ NSString *ToNSString(const std::string &s) {
                             static_cast<float>(red),
                             static_cast<float>(green),
                             static_cast<float>(blue));
+}
+
+- (void)setOpacityForKeyPath:(NSString *)keyPath opacity:(double)opacity {
+    if (_torndown || !_coordinator || keyPath.length == 0) {
+        return;
+    }
+    _coordinator->setOpacity(std::string(keyPath.UTF8String ?: ""),
+                              static_cast<float>(opacity));
+}
+
+- (void)setStrokeWidthForKeyPath:(NSString *)keyPath width:(double)width {
+    if (_torndown || !_coordinator || keyPath.length == 0) {
+        return;
+    }
+    _coordinator->setStrokeWidth(std::string(keyPath.UTF8String ?: ""),
+                                  static_cast<float>(width));
 }
 
 - (void)setSurfaceWidth:(size_t)width height:(size_t)height {

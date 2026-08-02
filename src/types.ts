@@ -126,6 +126,22 @@ export interface RlottieColorOverride {
   color: string;
 }
 
+/** Phase 6 addition. Parallel in shape to `RlottieColorOverride`. */
+export interface RlottieOpacityOverride {
+  /** rlottie key path, same syntax as `RlottieColorOverride.keyPath`. */
+  keyPath: string;
+  /** 0..1. Out-of-range values are clamped natively rather than rejected. */
+  opacity: number;
+}
+
+/** Phase 6 addition. Parallel in shape to `RlottieColorOverride`. */
+export interface RlottieStrokeWidthOverride {
+  /** rlottie key path, same syntax as `RlottieColorOverride.keyPath`. */
+  keyPath: string;
+  /** Pixels, > 0. Out-of-range values are clamped natively rather than rejected. */
+  width: number;
+}
+
 export interface RlottieViewProps extends ViewProps {
   source: RlottieSource;
 
@@ -181,6 +197,11 @@ export interface RlottieViewProps extends ViewProps {
 
   colorOverrides?: RlottieColorOverride[];
 
+  /** Phase 6 addition. Applies on the same serialized render worker as rendering. */
+  opacityOverrides?: RlottieOpacityOverride[];
+  /** Phase 6 addition. Applies on the same serialized render worker as rendering. */
+  strokeWidthOverrides?: RlottieStrokeWidthOverride[];
+
   onAnimationLoaded?: (event: NativeSyntheticEvent<RlottieLoadedEvent>) => void;
   onAnimationError?: (event: NativeSyntheticEvent<RlottieErrorEvent>) => void;
   onAnimationStart?: (
@@ -204,9 +225,23 @@ export interface RlottieViewProps extends ViewProps {
 // --- Imperative ref ---------------------------------------------------------
 
 export interface RlottiePlayOptions {
-  /** One-off segment for THIS play only; does not change the configured range. */
+  /**
+   * One-off segment for THIS play only; does not change the configured range.
+   *
+   * When `marker` is set it WINS and `startFrame`/`endFrame` are ignored
+   * (Phase 6, docs/bridge-contract.md "Command id 9 — playMarker") — mixing a
+   * named segment with an explicit frame range has no coherent meaning, so
+   * this is a documented precedence rather than a silent merge.
+   */
   startFrame?: number;
   endFrame?: number;
+  /**
+   * Plays the frame segment of a named marker from the Lottie source (see
+   * `RlottieMarker`, delivered via `onAnimationLoaded`). Takes precedence over
+   * `startFrame`/`endFrame` when both are provided. An unknown marker name is
+   * a silent no-op, not an error.
+   */
+  marker?: string;
 }
 
 export interface RlottieViewRef {

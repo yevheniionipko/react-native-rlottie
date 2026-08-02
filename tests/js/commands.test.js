@@ -101,6 +101,7 @@ rn.__uiManagerMock._config = {
     seekToProgress: 6,
     seekToFrame: 7,
     setSpeed: 8,
+    playMarker: 9,
   },
 };
 dispatchRlottieCommand(1, 'seekToFrame', [42]);
@@ -111,6 +112,56 @@ ok(
 ok(
   'dynamic config id matches the stable contract id',
   RlottieCommand.SeekToFrame === 7,
+);
+
+// --- Phase 6: playMarker (command id 9) --------------------------------------
+
+reset();
+ok(
+  'RlottieCommand.PlayMarker is the frozen id 9',
+  RlottieCommand.PlayMarker === 9,
+);
+
+reset();
+rn.__uiManagerMock._config = {
+  Commands: {
+    __reservedCommandSlot0: 0,
+    play: 1,
+    pause: 2,
+    resume: 3,
+    stop: 4,
+    reset: 5,
+    seekToProgress: 6,
+    seekToFrame: 7,
+    setSpeed: 8,
+    playMarker: 9,
+  },
+};
+ok(
+  'playMarker dispatches (returns true) with dynamic config',
+  dispatchRlottieCommand(1, 'playMarker', ['intro']) === true,
+);
+ok(
+  'playMarker resolves through the SAME dynamic id-resolution path as every other command',
+  rn.__dispatchedCalls[0].commandId === 9,
+);
+ok(
+  'playMarker forwards the marker name arg',
+  rn.__dispatchedCalls[0].commandArgs[0] === 'intro',
+);
+
+reset();
+ok(
+  'playMarker falls back to the name string when no config is available, like every other command',
+  dispatchRlottieCommand(1, 'playMarker', ['outro']) === true &&
+    rn.__dispatchedCalls[0].commandId === 'playMarker',
+);
+
+reset();
+ok(
+  'playMarker on an unmounted view returns false and dispatches nothing',
+  dispatchRlottieCommand(null, 'playMarker', ['intro']) === false &&
+    rn.__dispatchedCalls.length === 0,
 );
 
 // --- Command id resolution: no config -> falls back to the name string ------

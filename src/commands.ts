@@ -32,6 +32,8 @@ export enum RlottieCommand {
   SeekToProgress = 6,
   SeekToFrame = 7,
   SetSpeed = 8,
+  /** Phase 6 addition. Append-only — see "iOS numeric-id fragility". */
+  PlayMarker = 9,
 }
 
 export type RlottieCommandName =
@@ -42,7 +44,8 @@ export type RlottieCommandName =
   | 'reset'
   | 'seekToProgress'
   | 'seekToFrame'
-  | 'setSpeed';
+  | 'setSpeed'
+  | 'playMarker';
 
 /** Maps each name to its stable numeric id, for the integer dispatch path. */
 export const RLOTTIE_COMMAND_IDS: Record<RlottieCommandName, RlottieCommand> = {
@@ -54,6 +57,7 @@ export const RLOTTIE_COMMAND_IDS: Record<RlottieCommandName, RlottieCommand> = {
   seekToProgress: RlottieCommand.SeekToProgress,
   seekToFrame: RlottieCommand.SeekToFrame,
   setSpeed: RlottieCommand.SetSpeed,
+  playMarker: RlottieCommand.PlayMarker,
 };
 
 /** Anything with a native tag — what `useRef` on the host component yields. */

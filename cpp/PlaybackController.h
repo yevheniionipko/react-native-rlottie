@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <deque>
 #include <optional>
+#include <string>
 
 #include "AnimationMetadata.h"
 #include "PlaybackState.h"
@@ -50,6 +51,13 @@ public:
     // Configuration & imperative commands (all [main]).
     void configure(const PlaybackConfig& config);
     void play(std::optional<std::size_t> startFrame, std::optional<std::size_t> endFrame);
+    // Chunk 6.2 — plays the frame segment of a named marker (metadata_.markers)
+    // as a ONE-OFF, exactly like play(start, end): does not mutate config_, so a
+    // later argument-less play() resolves the persistent config again, not the
+    // marker's segment. Returns false (silent no-op) when no animation is
+    // loaded yet or the name is unknown/empty; the segment is clamped to
+    // [0, totalFrames-1] and to start<=end.
+    bool playMarker(const std::string& name);
     void pause();
     void resume();
     void stop();
@@ -68,6 +76,9 @@ public:
 
 private:
     void resolveSegment();
+    // Shared tail of play()/playMarker(): sets segStart_/segEnd_ (already
+    // clamped by the caller) and transitions to Playing.
+    void startSegment(std::size_t start, std::size_t end);
     void advancePlaying(double monotonicNow);
     double finishAtLoop() const;  // wrap count at which playback finishes (may be +inf)
     bool hasAnimation() const;    // metadata loaded and not Failed/Empty/Loading

@@ -6,7 +6,7 @@
 // RNRlottiePlayer (Chunk 2.1). This file's job is purely wiring: exporting
 // the component/props/events under the EXACT names in
 // docs/bridge-contract.md (the frozen contract Android's RlottieViewManager
-// mirrors), and dispatching the 8 numeric/string commands to the right view.
+// mirrors), and dispatching the 9 numeric/string commands to the right view.
 //
 // ## Numeric command dispatch — how this actually works on RN <= 0.81
 //
@@ -29,12 +29,14 @@
 //   1. The array is 0-indexed, but the frozen contract's ids start at 1, so
 //      declaration index 0 must be reserved (see -__reservedCommandSlot0:
 //      below) purely to keep index N == command id N.
-//   2. This class must export ONLY these 9 methods, in EXACTLY this order,
-//      and nothing else via RCT_EXPORT_METHOD — an extra exported method
-//      (before or interleaved) would silently shift every id after it.
-//   3. If JS ever sends an int outside 0...8, `_methods[commandID]` is a
+//   2. This class must export ONLY these 10 methods (slot 0 + ids 1...9), in
+//      EXACTLY this order, and nothing else via RCT_EXPORT_METHOD — an extra
+//      exported method (before or interleaved) would silently shift every id
+//      after it. New commands are append-only (Phase 6's `playMarker`, id 9,
+//      was the first such addition — see its own comment below).
+//   3. If JS ever sends an int outside 0...9, `_methods[commandID]` is a
 //      plain NSArray index and WILL raise NSRangeException — so the JS layer
-//      (Chunk 4.1) must never emit an id outside the contract's 1...8.
+//      (Chunk 4.1) must never emit an id outside the contract's 1...9.
 //
 // The STRING path is independent of all that fragility: `methodsByName` is
 // keyed by each method's JS name (the text before the first `:`), so as long
@@ -88,6 +90,22 @@ static BOOL RNRlottieParseHexColor(NSString *hex, float *outR, float *outG, floa
   *outR = ((rgb >> 16) & 0xFF) / 255.0f;
   *outG = ((rgb >> 8) & 0xFF) / 255.0f;
   *outB = (rgb & 0xFF) / 255.0f;
+  return YES;
+}
+
+// Extracts a finite NSNumber (rejecting non-numeric JSON, NaN, and +/-inf) as
+// a double. Used by the Phase 6 `opacityOverrides`/`strokeWidthOverrides`
+// parsers below — a malformed/non-finite entry must not crash a render, so it
+// is dropped here rather than forwarded to the player.
+static BOOL RNRlottieFiniteNumber(id value, double *outValue) {
+  if (![value isKindOfClass:[NSNumber class]]) {
+    return NO;
+  }
+  const double d = [(NSNumber *)value doubleValue];
+  if (!isfinite(d)) {
+    return NO;
+  }
+  *outValue = d;
   return YES;
 }
 
@@ -188,6 +206,50 @@ RCT_CUSTOM_VIEW_PROPERTY(colorOverrides, NSArray, RNRlottieView) {
   }
 }
 
+// `opacityOverrides`: `[{keyPath: string, opacity: number}]`, opacity 0..1
+// (out-of-range values are clamped natively — see docs/bridge-contract.md's
+// "Phase 6 additions"). Applied immediately, same rationale as
+// `colorOverrides` above. A malformed entry (missing/wrong-typed keyPath or
+// opacity, or a non-finite number) is skipped rather than crashing the whole
+// prop apply.
+RCT_CUSTOM_VIEW_PROPERTY(opacityOverrides, NSArray, RNRlottieView) {
+  NSArray *overrides = json ? [RCTConvert NSArray:json] : nil;
+  for (id item in overrides) {
+    if (![item isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    NSDictionary *entry = (NSDictionary *)item;
+    NSString *keyPath = entry[@"keyPath"];
+    if (![keyPath isKindOfClass:[NSString class]] || keyPath.length == 0) {
+      continue;
+    }
+    double opacity;
+    if (RNRlottieFiniteNumber(entry[@"opacity"], &opacity)) {
+      [view.player setOpacityForKeyPath:keyPath opacity:opacity];
+    }
+  }
+}
+
+// `strokeWidthOverrides`: `[{keyPath: string, width: number}]`, width in px
+// (> 0; out-of-range values clamped natively, same as above).
+RCT_CUSTOM_VIEW_PROPERTY(strokeWidthOverrides, NSArray, RNRlottieView) {
+  NSArray *overrides = json ? [RCTConvert NSArray:json] : nil;
+  for (id item in overrides) {
+    if (![item isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    NSDictionary *entry = (NSDictionary *)item;
+    NSString *keyPath = entry[@"keyPath"];
+    if (![keyPath isKindOfClass:[NSString class]] || keyPath.length == 0) {
+      continue;
+    }
+    double width;
+    if (RNRlottieFiniteNumber(entry[@"width"], &width)) {
+      [view.player setStrokeWidthForKeyPath:keyPath width:width];
+    }
+  }
+}
+
 #pragma mark - Events (direct)
 
 RCT_EXPORT_VIEW_PROPERTY(onAnimationLoaded, RCTDirectEventBlock)
@@ -220,7 +282,7 @@ RCT_EXPORT_VIEW_PROPERTY(onAnimationFinish, RCTDirectEventBlock)
 // contract's stable ids start at 1, so this placeholder exists solely to
 // keep index N == command id N for the 8 real commands below. Never invoked
 // by name (not in docs/bridge-contract.md) and never invoked by JS by index
-// (JS only emits ids 1...8) — a genuine no-op.
+// (JS only emits ids 1...9) — a genuine no-op.
 RCT_EXPORT_METHOD(__reservedCommandSlot0 : (nonnull NSNumber *)reactTag) {
   (void)reactTag;
 }
@@ -289,6 +351,19 @@ RCT_EXPORT_METHOD(setSpeed : (nonnull NSNumber *)reactTag speed : (double)speed)
   [self rnrlottie_withView:reactTag
                          do:^(RNRlottieView *view) {
                            [view.player setSpeed:speed];
+                         }];
+}
+
+// id 9 — Phase 6 addition. MUST stay last: this class's numeric command ids
+// are assigned by RCT_EXPORT_METHOD declaration order (see the file-header
+// comment), and new commands are append-only. An unknown marker name is a
+// silent no-op (docs/bridge-contract.md's "Phase 6 additions") — the bool
+// -playMarker: returns is intentionally ignored here, exactly as no other
+// command here surfaces a return value.
+RCT_EXPORT_METHOD(playMarker : (nonnull NSNumber *)reactTag name : (NSString *)name) {
+  [self rnrlottie_withView:reactTag
+                         do:^(RNRlottieView *view) {
+                           [view.player playMarker:name];
                          }];
 }
 

@@ -31,6 +31,7 @@ Never renumber these; they are persisted in released JS bundles.
 | 6   | `seekToProgress` | `[progress: double]` (0..1)                                         |
 | 7   | `seekToFrame`    | `[frame: int]`                                                      |
 | 8   | `setSpeed`       | `[speed: double]`                                                   |
+| 9   | `playMarker`     | `[name: string]` — added in Phase 6; see "Phase 6 additions"        |
 
 Both platforms **must** accept the command as an integer id _and_ as the string
 name. RN changed `dispatchViewManagerCommand` from int to string ids across
@@ -60,9 +61,13 @@ those same sequential indices. Consequences for `ios/RNRlottieViewManager.mm`:
 
 - Declaration index 0 is a reserved no-op (`__reservedCommandSlot0`) purely so
   that index N == command id N, matching Android's explicit `getCommandsMap()`.
-- That file must export **only** these 9 methods, in **exactly** this order. An
-  extra or reordered `RCT_EXPORT_METHOD` silently shifts every later id.
-- An integer id outside 0…8 raises `NSRangeException` rather than failing
+- That file must export **only** the commands in the table above plus the
+  reserved slot — currently **10** methods (slot 0 + ids 1–9) — in **exactly**
+  that order. An extra or reordered `RCT_EXPORT_METHOD` silently shifts every
+  later id.
+- New commands are **append-only**: declare them after the current last method,
+  never inserted. `playMarker` (id 9) was the first such addition.
+- An integer id outside 0…9 raises `NSRangeException` rather than failing
   gracefully, so the JS layer must never emit one.
 
 The string-name path has none of this fragility, so Chunk 4.1 should prefer
@@ -120,6 +125,75 @@ Playback-shaping props (`loop`, `repeatCount`, `speed`, `startFrame`, `endFrame`
 `autoPlay`) map onto the single native `configure(...)` call, so they must be
 **coalesced and applied once per prop transaction**, not one native call per
 setter — otherwise a partially-applied config is briefly live.
+
+## Phase 6 additions — dynamic properties
+
+Frozen before implementation, exactly like the Phase 2/3 surface above: three
+streams implement against this section concurrently, so anything ambiguous here
+becomes a platform divergence.
+
+### Command id 9 — `playMarker`
+
+| id  | name         | args             |
+| --- | ------------ | ---------------- |
+| 9   | `playMarker` | `[name: string]` |
+
+Plays the frame segment of the named marker (markers come from the Lottie source
+and already reach JS in `onAnimationLoaded`). Like `play`'s frame range, this is
+a **one-off** segment for this playback — it must not be written into the
+persistent config.
+
+**iOS: `playMarker` MUST be declared LAST** in `ios/RNRlottieViewManager.mm`,
+after `setSpeed`, so it lands at declaration index 9. Inserting it anywhere
+earlier silently renumbers every command after it — see "iOS numeric-id
+fragility". This is the first command added since the ids were frozen, and the
+append-only rule is exactly why they were frozen.
+
+An unknown marker name is a **silent no-op**, consistent with how a command to an
+unmounted view is dropped. It does NOT emit `onAnimationError`: that would mean a
+new error code, and a missing marker is a caller mistake rather than a failure of
+the animation. Native returns a bool the adapters ignore.
+
+TS surfaces this through the existing ref method rather than a new one:
+`RlottiePlayOptions` gains `marker?: string`. When `marker` is set it wins and
+`startFrame`/`endFrame` are ignored (documented, not silently merged) — mixing a
+named segment with an explicit frame range has no coherent meaning.
+
+### Props — opacity and stroke overrides
+
+Parallel in shape to the existing `colorOverrides`, deliberately NOT merged into
+one polymorphic array: three narrow typed arrays are simpler to validate on both
+platforms than one discriminated union crossing the bridge.
+
+| prop                   | type  | notes                                                     |
+| ---------------------- | ----- | --------------------------------------------------------- |
+| `opacityOverrides`     | array | `[{keyPath: string, opacity: number}]`, `opacity` is 0..1 |
+| `strokeWidthOverrides` | array | `[{keyPath: string, width: number}]`, `width` in px, > 0  |
+
+`keyPath` is an rlottie key path, same syntax as `colorOverrides`. Out-of-range
+values are clamped natively rather than rejected — a bad override should not fail
+the whole animation.
+
+All three override props apply **on the same serialized render worker** as
+rendering (plan §6). They must never mutate the animation while a frame is being
+rendered; route them through `RenderCoordinator`, never directly at the core.
+
+### Core API (what the platform layers bind to)
+
+```cpp
+// RlottiePlayerCore — [worker] only
+void setColor(const std::string& keyPath, float r, float g, float b);   // exists
+void setOpacity(const std::string& keyPath, float opacity);             // 0..1
+void setStrokeWidth(const std::string& keyPath, float width);
+
+// RenderCoordinator — thread-safe, hops onto the worker
+void setColor(std::string keyPath, float r, float g, float b);          // exists
+void setOpacity(std::string keyPath, float opacity);
+void setStrokeWidth(std::string keyPath, float width);
+
+// PlaybackController — [UI] only. False when the marker is unknown.
+bool playMarker(const std::string& name);
+```
 
 ## Source resolution boundary
 

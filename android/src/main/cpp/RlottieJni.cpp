@@ -277,6 +277,38 @@ JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeSetColor(
     h->coordinator().setColor(toString(env, keyPath), r, g, b);
 }
 
+// Phase 6 additions (docs/bridge-contract.md's "Phase 6 additions") ---------
+
+// Backs the `opacityOverrides` prop. Thread-safe on the coordinator, same as
+// nativeSetColor above; out-of-range opacity is clamped natively
+// (RenderCoordinator::setOpacity), not here.
+JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeSetOpacity(
+    JNIEnv* env, jclass, jlong handle, jstring keyPath, jfloat opacity) {
+    auto* h = asHandle(handle);
+    if (h == nullptr) return;
+    h->coordinator().setOpacity(toString(env, keyPath), opacity);
+}
+
+// Backs the `strokeWidthOverrides` prop. Out-of-range width is clamped
+// natively (RenderCoordinator::setStrokeWidth), not here.
+JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeSetStrokeWidth(
+    JNIEnv* env, jclass, jlong handle, jstring keyPath, jfloat width) {
+    auto* h = asHandle(handle);
+    if (h == nullptr) return;
+    h->coordinator().setStrokeWidth(toString(env, keyPath), width);
+}
+
+// Backs command id 9 (`playMarker`). [UI]-only, same threading contract as
+// nativePlay/nativePause/etc. above. Returns false for an unknown marker
+// name, mirroring PlaybackController::playMarker; Kotlin ignores the result
+// (a silent no-op per the contract, not an error/event).
+JNIEXPORT jboolean JNICALL Java_com_rlottie_RlottieBridge_nativePlayMarker(
+    JNIEnv* env, jclass, jlong handle, jstring name) {
+    auto* h = asHandle(handle);
+    if (h == nullptr) return JNI_FALSE;
+    return h->playback().playMarker(toString(env, name)) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_com_rlottie_RlottieBridge_nativeDestroy(JNIEnv*, jclass,
                                                                    jlong handle) {
     // Idempotent; a zero/stale/already-destroyed handle is a no-op.

@@ -103,6 +103,22 @@ internal object RlottieBridge {
 
     @JvmStatic external fun nativeSetColor(h: Long, keyPath: String, r: Float, g: Float, b: Float)
 
+    // --- Phase 6: dynamic properties + playMarker (docs/bridge-contract.md's
+    // "Phase 6 additions") ---------------------------------------------------
+
+    /** Backs `opacityOverrides`; opacity 0..1, clamped natively out of range. */
+    @JvmStatic external fun nativeSetOpacity(h: Long, keyPath: String, opacity: Float)
+
+    /** Backs `strokeWidthOverrides`; width in px, clamped natively out of range. */
+    @JvmStatic external fun nativeSetStrokeWidth(h: Long, keyPath: String, width: Float)
+
+    /**
+     * Backs command id 9 (`playMarker`). [UI]-only, same threading contract as
+     * [nativePlay]/[nativePause]/etc. above. Returns false for an unknown
+     * marker name — a silent no-op, not an error/event.
+     */
+    @JvmStatic external fun nativePlayMarker(h: Long, name: String): Boolean
+
     // --- Global / process-wide (Chunk 3.4) -------------------------------------
     //
     // No handle: these back `ModelCacheController`, process-global rlottie

@@ -65,17 +65,9 @@ void PlaybackController::configure(const PlaybackConfig& config) {
     }
 }
 
-void PlaybackController::play(std::optional<std::size_t> startFrame,
-                              std::optional<std::size_t> endFrame) {
-    if (startFrame) config_.startFrame = *startFrame;
-    if (endFrame) config_.endFrame = *endFrame;
-
-    if (!hasAnimation()) {
-        config_.autoPlay = true;  // deferred: play once loaded
-        return;
-    }
-    if (startFrame || endFrame) resolveSegment();
-
+void PlaybackController::startSegment(std::size_t start, std::size_t end) {
+    segStart_ = start;
+    segEnd_ = end;
     state_ = PlaybackState::Playing;
     finishedEmitted_ = false;
     currentPos_ = static_cast<double>(speed_ >= 0 ? segStart_ : segEnd_);
@@ -84,6 +76,66 @@ void PlaybackController::play(std::optional<std::size_t> startFrame,
     lastLoops_ = 0;
     forceRender_ = true;
     queue(PlaybackEvent::Started);
+}
+
+void PlaybackController::play(std::optional<std::size_t> startFrame,
+                              std::optional<std::size_t> endFrame) {
+    if (!hasAnimation()) {
+        // Nothing resolved yet: stash into the persistent config so onLoaded()
+        // (which calls resolveSegment() from config_) picks it up once.
+        if (startFrame) config_.startFrame = *startFrame;
+        if (endFrame) config_.endFrame = *endFrame;
+        config_.autoPlay = true;  // deferred: play once loaded
+        return;
+    }
+
+    // Baseline is always the PERSISTENT config's segment, never whatever
+    // segStart_/segEnd_ happened to be left over from a prior one-off play()
+    // or playMarker() call — otherwise a one-off segment would leak into a
+    // later argument-less play() (CLAUDE.md / bridge-contract.md Phase 6).
+    resolveSegment();
+    if (startFrame || endFrame) {
+        // One-off override for THIS play only — never written into config_.
+        const std::size_t last = metadata_.totalFrames > 0 ? metadata_.totalFrames - 1 : 0;
+        std::size_t s = startFrame ? *startFrame : segStart_;
+        std::size_t e = endFrame ? *endFrame : segEnd_;
+        if (s > last) s = last;
+        if (e > last) e = last;
+        if (e < s) e = s;
+        segStart_ = s;
+        segEnd_ = e;
+    }
+    startSegment(segStart_, segEnd_);
+}
+
+bool PlaybackController::playMarker(const std::string& name) {
+    // Metadata not loaded yet (or load failed): no markers to resolve against,
+    // so any name is unknown by definition.
+    if (!hasAnimation() || name.empty()) {
+        return false;
+    }
+    const Marker* found = nullptr;
+    for (const auto& m : metadata_.markers) {
+        if (m.name == name) {
+            found = &m;
+            break;
+        }
+    }
+    if (found == nullptr) {
+        return false;
+    }
+
+    // One-off segment, clamped/repaired the same way resolveSegment() clamps
+    // config_'s range: out-of-range or degenerate (end < start) marker bounds
+    // from the source data must not crash or hang playback.
+    const std::size_t last = metadata_.totalFrames > 0 ? metadata_.totalFrames - 1 : 0;
+    std::size_t s = found->startFrame;
+    std::size_t e = found->endFrame;
+    if (s > last) s = last;
+    if (e > last) e = last;
+    if (e < s) e = s;
+    startSegment(s, e);
+    return true;
 }
 
 void PlaybackController::pause() {
