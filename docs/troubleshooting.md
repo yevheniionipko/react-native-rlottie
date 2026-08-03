@@ -122,10 +122,22 @@ null`, or similar exclusion).
   vendoring/forking this library's Android build script, verify the Kotlin
   plugin is still applied.
 - **`newArchEnabled=true` and the component doesn't render, or the module is
-  "not available".** The New Architecture path requires **RN >= 0.76**; below
-  that the component will not resolve. On a supported version, see the next
-  section — the usual cause is a stale autolinking cache, not a missing
-  feature.
+  "not available", on RN >= 0.76.** On a version this library supports, see
+  the next section — the usual cause is a stale autolinking cache, not a
+  missing feature.
+- **Build fails during codegen** (`UnsupportedGenericParserError: ...
+Unrecognized generic type 'undefined'` from `NativeRlottieModule`, or an
+  uncaught `Error: Unknown prop type for "autoPlay": "undefined"`), on RN
+  0.76.0–0.79.x, on either architecture. This was a real bug in versions of
+  this library before the codegen specs were fixed to avoid a namespaced type
+  form that version range's `@react-native/codegen` cannot parse — see the
+  CHANGELOG and `docs/new-architecture-design.md`'s "Minimum React Native
+  version" section for the full history. If you still see this on a current
+  install, check that `node_modules/@yevheniionipko/react-native-rlottie/src/specs/*.ts`
+  import codegen types directly from
+  `react-native/Libraries/Types/CodegenTypes` rather than via
+  `import type {CodegenTypes} from 'react-native'` — if it's the latter,
+  something is serving a stale/pre-fix copy of the package.
 
 ## New Architecture: renders, but the Fabric component isn't actually registered
 

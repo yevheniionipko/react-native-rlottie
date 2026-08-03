@@ -10,8 +10,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **New Architecture (Fabric + TurboModules) support, alongside the existing
   Legacy Architecture.** One package serves both; the correct component and
   module are selected automatically, with no configuration and no separate
-  import path. Requires **RN >= 0.76** for the New Architecture path; the
-  Legacy path still covers 0.68+.
+  import path. Requires **RN >= 0.76**, verified directly (not just reasoned)
+  against real RN 0.76.0, 0.77.0, 0.77.3, 0.80.0, and 0.81.0 — see the Fixed
+  section below for a real, since-fixed bug this verification caught.
 - Codegen specs (`src/specs/`), a Fabric component view on iOS
   (`ios/fabric/RNRlottieComponentView.mm`, which composes the existing
   `RNRlottieView` rather than reimplementing it), a Fabric-capable Android
@@ -43,6 +44,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `src/RlottieView.tsx` contained a raw NUL byte used as a string separator,
   which made the file non-text: `grep` skipped it silently and `git` diffed it
   as binary. Replaced with an escape producing a byte-identical string.
+- **The codegen specs would have crashed the build on RN 0.76.0–0.79.x, on
+  both architectures — found and fixed by installing RN 0.77 and running
+  codegen against it before release.** The specs used the namespaced
+  `CodegenTypes.X` form, which `@react-native/codegen`'s TypeScript parser
+  cannot resolve until version 0.80.0 (confirmed by extracting the real
+  package for every version 0.76.0–0.81.0 and diffing the parser method
+  responsible): an uncaught `Unknown prop type for "autoPlay": "undefined"`
+  from the component spec, `UnsupportedGenericParserError: ... Unrecognized
+generic type 'undefined'` from the module spec. Because a library's codegen
+  tasks run unconditionally regardless of `newArchEnabled`, this would have
+  broken the Legacy Architecture too, not just the New Architecture path.
+  Fixed by importing the primitive codegen types directly from
+  `react-native/Libraries/Types/CodegenTypes` instead of through the
+  namespace — verified clean at 0.76.0, 0.77.0, 0.77.3, 0.80.0, and 0.81.0,
+  and against a realistic scratch app reproducing the exact commands both
+  `pod install` and a real Android Gradle build issue. See
+  `docs/new-architecture-design.md`'s "Minimum React Native version" section.
 - `Rlottie.isAvailable()` could report `false` (and the other module calls
   throw) under the New Architecture even with the module correctly linked. The
   native module was resolved once at import time and the result cached, so a

@@ -138,33 +138,49 @@ the imperative ref API.
 
 ## Supported React Native versions
 
-This library supports **both architectures from one package**. The Legacy
-Architecture path (`newArchEnabled=false`) is unchanged and remains supported
-down to RN 0.68. A real Fabric component and a real TurboModule are also
-shipped, and are selected automatically when your app runs the New
-Architecture — there is nothing to configure and no separate entry point.
+This library supports **both architectures from one package**. A real Fabric
+component and a real TurboModule are shipped alongside the Legacy Architecture
+path, and are selected automatically when your app runs the New Architecture —
+there is nothing to configure and no separate entry point.
 
-**New Architecture support requires RN >= 0.76.** Below that, iOS third-party
-component registration used a different generated provider and bridgeless was
-not yet the default, so supporting it would mean shipping two registration
-mechanisms. On RN < 0.76 with `newArchEnabled=true` the component will fail to
-resolve rather than silently misbehave. The Legacy path still covers 0.68+.
+**New Architecture support requires RN >= 0.76**, verified rather than just
+reasoned: RN 0.77 was actually installed and codegen run against it. That
+verification surfaced and closed a real bug — see the note below the table —
+that briefly would have broken RN 0.76–0.79 on **both** architectures.
 
-| RN version      | Legacy Architecture                                   | New Architecture                              |
-| --------------- | ----------------------------------------------------- | --------------------------------------------- |
-| >= 0.82.0       | Removed by React Native itself.                       | Expected to work, not independently verified. |
-| 0.81.0          | **Verified** — see the verification matrix below.     | **Verified** — see the matrix below.          |
-| 0.76.0 – 0.80.x | Expected to work, not independently verified.         | Expected to work, not independently verified. |
-| 0.71.0 – 0.75.x | Expected to work, not independently verified.         | **Not supported** (see the 0.76 floor above). |
-| 0.68.0 – 0.70.x | Expected to work, not verified. See the RN 0.71 note. | **Not supported.**                            |
+**This library was, at one point during development, silently broken on RN
+0.76.0–0.79.x, on both architectures — and this is fixed as of the current
+version.** Its codegen specs originally used the namespaced `CodegenTypes.X`
+form, and `@react-native/codegen`'s TypeScript parser cannot resolve that
+qualified form until version 0.80.0 — confirmed by extracting the real
+package for every version 0.76.0 through 0.81.0 and diffing the parser method
+responsible. Below 0.80, that form crashed codegen while parsing this
+library's spec files. Because a library's codegen tasks run unconditionally
+regardless of `newArchEnabled`, that crash hit the Legacy Architecture too,
+not just Fabric. **The fix**: both spec files now import the primitive
+codegen types directly from `react-native/Libraries/Types/CodegenTypes`
+instead of through the namespace, which resolves the same way on every RN
+version back to (at least) 0.76.0 — verified clean against real
+`@react-native/codegen` at 0.76.0, 0.77.0, 0.77.3, 0.80.0, and 0.81.0, and
+against a realistic scratch app reproducing the exact commands both
+`pod install` and a real Android Gradle build issue. See
+[`docs/new-architecture-design.md`](docs/new-architecture-design.md)'s
+"Minimum React Native version" section for the full account.
+
+| RN version      | Legacy Architecture                                                                                           | New Architecture                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| >= 0.82.0       | Removed by React Native itself.                                                                               | Expected to work, not independently verified. |
+| 0.81.0          | **Verified** — see the verification matrix below.                                                             | **Verified** — see the matrix below.          |
+| 0.76.0 – 0.80.x | **Verified** — codegen runs clean against real `@react-native/codegen` at 0.76.0, 0.77.0, 0.77.3, and 0.80.0. | Expected to work, not independently verified. |
+| 0.71.0 – 0.75.x | Expected to work, not independently verified.                                                                 | **Not supported** (see the 0.76 floor above). |
+| 0.68.0 – 0.70.x | Expected to work, not verified. See the RN 0.71 note.                                                         | **Not supported.**                            |
 
 `peerDependencies.react-native` is `>=0.68.0` — open-ended. It previously
 carried a `<0.82.0` ceiling, which existed only because this library was
-Legacy-only and RN 0.82 drops the Legacy Architecture. Now that a real Fabric
-component and TurboModule ship, that ceiling was blocking installs for no
-reason and has been removed. Treat everything outside RN 0.81.0 itself as
-"should work per the code's stated assumptions," not as covered by CI or
-device testing in this repo.
+Legacy-only and RN 0.82 drops the Legacy Architecture; that ceiling was
+removed once a real Fabric component and TurboModule shipped. Treat
+everything outside RN 0.81.0 itself as "should work per the code's stated
+assumptions," not as covered by CI or device testing in this repo.
 
 On **RN >= 0.82 the New Architecture is the only option**, so this library's
 Fabric path is the one that runs there — nothing to configure. The JS layer is

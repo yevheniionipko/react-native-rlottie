@@ -49,7 +49,7 @@ support. The JS layer is safe on a New-Architecture-only runtime:
 `src/commands.ts` dereferences `UIManager`/`findNodeHandle` only inside the
 Legacy branch, which `isNewArchitectureEnabled()` skips, and
 `getViewManagerConfig` is called through optional chaining. Still unverified on
-0.82+: whether the Legacy *native* adapters (`ios/RNRlottieViewManager.mm`,
+0.82+: whether the Legacy _native_ adapters (`ios/RNRlottieViewManager.mm`,
 the `SimpleViewManager` subclass) still compile against an RN that removed the
 old architecture, since both are shipped and built unconditionally.
 
@@ -72,6 +72,81 @@ Why 0.76 and not lower:
 Everything below is written against 0.81 and is expected to hold on 0.76–0.81.
 The first implementation chunk owns confirming that on the lowest supported
 version, because codegen output details do drift.
+
+**Amended after actually installing RN 0.77 and running codegen against
+it: RN 0.76.0–0.79.x was, at the time, silently broken — not just for the
+New Architecture, but for the Legacy path too — and has since been fixed.**
+
+`@react-native/codegen`'s TypeScript parser cannot resolve a **qualified**
+type reference (`CodegenTypes.X`, a `TSTypeReference` whose `typeName` is a
+`TSQualifiedName`) until **0.80.0**. Verified directly, not inferred:
+`getTypeAnnotationName` in `parsers/typescript/parser.js` reads only
+`typeAnnotation.typeName.name` through 0.76.0–0.79.0; 0.80.0 adds an explicit
+`typeName.type === 'TSQualifiedName'` branch that resolves `.right.name`
+instead. Confirmed by extracting the real `@react-native/codegen` package for
+every version 0.76.0 through 0.81.0 and diffing that one method.
+
+Both spec files originally used the namespaced form throughout —
+`CodegenTypes.WithDefault<...>`, `CodegenTypes.Double`, `CodegenTypes.Int32`,
+`CodegenTypes.UnsafeObject` — because §1.1 above (written against 0.81)
+recommended it. Run against RN 0.77.0's `@react-native/codegen` via the exact
+entry point the Android Gradle plugin's `GenerateCodegenSchemaTask` invokes
+(`combine-js-to-schema-cli.js`, confirmed by reading that task's Kotlin
+source), both files failed:
+
+- `RlottieViewNativeComponent.ts` threw an **uncaught** `Error: Unknown prop
+type for "autoPlay": "undefined"` — not even codegen's own graceful error
+  type, a raw crash out of `getTypeAnnotation`.
+- `NativeRlottieModule.ts` threw `UnsupportedGenericParserError: Module
+NativeRlottieModule: Unrecognized generic type 'undefined' in NativeModule
+spec.` — the `undefined` was `getTypeAnnotationName` silently failing on
+  `CodegenTypes.UnsafeObject`'s qualified name and returning `void 0`, which
+  the switch then stringified into the error message.
+
+**This was not gated by `newArchEnabled`.** Chunk 9.2 established that a
+library's codegen tasks run unconditionally
+(`ReactPlugin.kt`'s `onlyIf { (isLibrary || needsCodegenFromPackageJson) &&
+!includesGeneratedCode }`, `isLibrary` true regardless of the consuming app's
+architecture flag) — that is what lets one Kotlin class serve both
+architectures with no source-set split, and it is exactly what made this
+break universal. A consuming app on RN 0.76–0.79 failed
+`generateCodegenSchemaFromJavaScript` for this library specifically, on
+Android, **even with `newArchEnabled=false`**.
+
+**The fix**: both spec files now import the primitive codegen types
+(`Double`, `Int32`, `WithDefault`, `DirectEventHandler`, `UnsafeObject`) as
+direct named imports from `react-native/Libraries/Types/CodegenTypes`,
+instead of through the `CodegenTypes` namespace. That resolves via a plain
+`TSTypeReference` with an `Identifier` `typeName`, which every version back
+to (at least) 0.76.0 has always handled — confirmed by testing the fix
+against a real `@react-native/codegen` at 0.76.0, 0.77.0, 0.77.3, 0.80.0, and
+0.81.0: clean at all five. `react-native/types/modules/Codegen.d.ts` declares
+an ambient `declare module 'react-native/Libraries/Types/CodegenTypes'` with
+the exact names needed, identically present in 0.77 and 0.81, so `tsc` (not
+just codegen) resolves the import too — verified via this repo's own
+`npm run typecheck` against 0.81 after the change, no new errors.
+
+One caveat surfaced and ruled out during this investigation, worth recording
+so it isn't rediscovered: driving `generate-codegen-artifacts.js` in its
+whole-app / `-s library` mode against RN 0.77.0–0.77.3 also throws inside RN's
+own `FBReactNativeSpec` (`NativeIdleCallbacks`, "Unrecognized generic type
+'IdleCallbackID'") — a genuine upstream RN defect, reproduced on both 0.77.0
+and the latest 0.77.3 patch. It is **not relevant to a real consumer**: the
+actual invocation both `pod install` (`codegen_utils.rb:325`, no `-s` override)
+and a real Android Gradle build use never reaches that code path, because RN
+ships `node_modules/react-native/React/FBReactNativeSpec/` **pre-generated**
+straight out of `npm install` — confirmed on a fresh install with no build
+step — so `shouldSkipGenerationForFBReactNativeSpec` short-circuits before
+ever parsing `NativeIdleCallbacks`. Verified end-to-end against a realistic
+scratch app (`react-native@0.77.3` plus this package as a real
+`node_modules` dependency, invoked exactly as `codegen_utils.rb` does:
+`generate-codegen-artifacts.js -p <app> -o ... -t ios`, no `-s` flag): it
+completes cleanly and emits real `RCTThirdPartyComponentsProvider`/
+`RNRlottieSpec` artifacts.
+
+**Consequence: the RN >= 0.76 floor stated at the top of this section is
+correct again, for both architectures**, and is now verified rather than
+reasoned from Fabric/bridgeless concerns alone.
 
 ---
 
@@ -100,18 +175,51 @@ Both filenames are **load-bearing, not convention**:
   (`node_modules/@react-native/codegen/lib/parsers/typescript/parser.js:122-128`
   rejects anything else).
 
-Type imports come from the namespace form, which the TS parser resolves through
-`TSQualifiedName`
-(`node_modules/@react-native/codegen/lib/parsers/typescript/parser.js:98-116`):
+**Amended: use named imports from the deep path, not the `CodegenTypes`
+namespace.** The namespace form below was this section's original
+recommendation and does typecheck under 0.81, but `@react-native/codegen`'s
+TypeScript parser cannot resolve a qualified reference (`CodegenTypes.X`)
+until codegen version 0.80.0 — verified by installing RN 0.77 and running
+codegen against specs written this way; see the "Minimum React Native
+version" section above for the full account of the break this caused and the
+fix.
 
 ```ts
+// Do not use — resolves under tsc, but breaks codegen before RN 0.80.
 import type {CodegenTypes, HostComponent, ViewProps} from 'react-native';
 ```
 
-`react-native/types/index.d.ts:141` re-exports the codegen types as the
-`CodegenTypes` namespace; the older deep path
-`react-native/Libraries/Types/CodegenTypes` has no `.d.ts` in 0.81 and will not
-typecheck.
+```ts
+// Use this instead — a plain Identifier reference, which codegen has always
+// resolved, verified back to RN 0.76.0.
+import type {HostComponent, ViewProps} from 'react-native';
+import type {
+  Double,
+  Int32,
+  DirectEventHandler,
+  WithDefault,
+} from 'react-native/Libraries/Types/CodegenTypes';
+```
+
+This section originally claimed the deep path "has no `.d.ts` in 0.81 and will
+not typecheck." That was wrong, and worth recording precisely because testing
+it in isolation reproduces the same wrong conclusion: `react-native/types/modules/Codegen.d.ts`
+declares `declare module 'react-native/Libraries/Types/CodegenTypes' {...}`
+with the exact names needed, and it is present, identically, in both 0.77 and
+0.81. The reason a naive standalone check fails is that TypeScript only loads
+that ambient declaration via `react-native/types/index.d.ts:69`'s
+`/// <reference path="modules/Codegen.d.ts" />` — and ambient module
+declarations apply to a whole compiled _program_, not per-file, so the deep
+import only resolves when something in the same compilation also imports
+`react-native` itself (which both spec files already do, for `HostComponent`/
+`ViewProps`/`TurboModule`). A single-file `tsc` check of the deep import in
+isolation, with no other file pulling in `react-native`'s main types, fails
+with `TS2307` — which is almost certainly how this section arrived at its
+original, incorrect claim. `npm run typecheck` (which compiles all of `src/`
+as one program) is the real gate and passes.
+
+`react-native/types/index.d.ts:141` also re-exports the codegen types as the
+`CodegenTypes` namespace — that path is what the (rejected) form above used.
 
 ## 1.2 `codegenConfig` in `package.json`
 
@@ -254,7 +362,7 @@ Facts behind that shape:
   `ReactCodegen` regardless of `new_arch_enabled`
   (`react_native_pods.rb:177-196`). So calling it in an old-arch build is safe;
   it costs pod graph size, not correctness.
-- **It must be called last** because it *reads then overwrites*
+- **It must be called last** because it _reads then overwrites_
   `spec.compiler_flags` and `spec.pod_target_xcconfig`
   (`new_architecture.rb:76-104`). Anything we set after it is lost; anything we
   set before it is preserved and appended to.
@@ -265,7 +373,7 @@ Facts behind that shape:
   is a real change to how shipped code is compiled and is called out as a
   verification item, not an assumption.
 - The vendored rlottie subspec's `-std=gnu++14 -fno-exceptions -fno-rtti
-  -U__ARM_NEON__` are **per-file `compiler_flags`**, which appear after the
+-U__ARM_NEON__` are **per-file `compiler_flags`**, which appear after the
   target-level xcconfig standard on the command line and therefore still win.
   This is why rlottie survives the C++20 switch. It is also why those flags must
   stay in `compiler_flags` and must not be "tidied" into `pod_target_xcconfig`:
@@ -279,7 +387,7 @@ internally by `#ifdef RCT_NEW_ARCH_ENABLED`.** The alternative — a conditional
 variable being set before our podspec is evaluated. It is: `use_react_native!`
 sets it (`react_native_pods.rb:101`) and CocoaPods evaluates the entire Podfile
 before reading podspecs during resolution. But the `#ifdef` form does not
-*depend* on that ordering being true, and it keeps one file list for both
+_depend_ on that ordering being true, and it keeps one file list for both
 architectures, so it is the one to use. The whole body of each new Fabric file
 sits inside the guard, so in an old-arch build the translation unit compiles to
 nothing.
@@ -318,7 +426,7 @@ Two Android build risks:
 2. **`android/src/main/cpp/react-native-rlottie.expmap` is untouched, and that
    is correct.** The C++ `ComponentDescriptor` and the TurboModule provider live
    in a **separate** shared library, `libreact_codegen_RNRlottieSpec.so`, built
-   from our generated `jni/` directory by the *app's* CMake
+   from our generated `jni/` directory by the _app's_ CMake
    (`GenerateAutolinkingNewArchitecturesFileTask.kt:56-88`), and registered by
    the app's generated `autolinking.cpp`. Our own
    `libreact-native-rlottie.so` continues to export only
@@ -339,7 +447,7 @@ platform.
 `ios/RNRlottieModule.mm` exports `RlottieModule` with three
 `RCT_REMAP_METHOD`s, all Promise-based, all incapable of failing
 (`(void)reject` in each). `android/src/main/java/com/rlottie/RlottieModule.kt`
-exports the same three as Promise-based `@ReactMethod`s, and *can* reject
+exports the same three as Promise-based `@ReactMethod`s, and _can_ reject
 (`INVALID_ARGUMENT` for a negative `modelCacheSize`, plus a catch-all per
 method). `src/RlottieModule.ts` adds a JS-only fourth entry point,
 `isAvailable()`, which is `NativeModules.RlottieModule != null`.
@@ -349,7 +457,15 @@ The Promise-on-both-platforms rule is frozen in
 
 ## 2.2 The spec
 
-`src/specs/NativeRlottieModule.ts`:
+**The sketch below uses the `CodegenTypes.X` namespace form, since that was
+this section's original recommendation — the real file does not, and must
+not.** See the "Minimum React Native version" amendment and §1.1's amendment
+above: that form breaks codegen (not `tsc`) below RN 0.80.0. The real
+`src/specs/NativeRlottieModule.ts` imports `UnsafeObject` directly from
+`react-native/Libraries/Types/CodegenTypes` instead.
+
+`src/specs/NativeRlottieModule.ts` (illustrative; see the amendment above for
+the one real difference):
 
 ```ts
 import type {CodegenTypes, TurboModule} from 'react-native';
@@ -370,7 +486,7 @@ Three deliberate choices:
 - **`configure`'s argument is `UnsafeObject`, not a typed object.** A typed
   object argument makes codegen emit a C++/Obj-C struct
   (`JS::NativeRlottieModule::SpecConfigureOptions`) into the generated protocol.
-  That protocol is what the *same* Obj-C class must satisfy, and a struct
+  That protocol is what the _same_ Obj-C class must satisfy, and a struct
   parameter cannot be expressed as an old-architecture `RCT_EXPORT_METHOD` — so
   a typed argument forces the module implementation itself to be
   `#ifdef`-split into two method bodies. `UnsafeObject` generates `NSDictionary *`
@@ -397,7 +513,7 @@ Three deliberate choices:
 - Keep `RCT_EXPORT_MODULE(RlottieModule)` and
   `+ (BOOL)requiresMainQueueSetup { return NO; }`. Both are still honoured
   under TurboModules, and `requiresMainQueueSetup` returning NO is why we do
-  *not* list the module in any main-queue-setup provider.
+  _not_ list the module in any main-queue-setup provider.
 - Declare conformance to the generated protocol and add the TurboModule factory,
   both behind the guard:
 
@@ -428,7 +544,7 @@ and inside the implementation:
   current file uses `RCT_REMAP_METHOD`, which invents its own selector
   (`configureWithOptions:resolver:rejecter:`). The generated protocol will
   declare `- (void)configure:(NSDictionary *)options
-  resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject;`.
+resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject;`.
   So the chunk must switch to plain `RCT_EXPORT_METHOD` with the codegen
   selector names and verify against the actual generated header rather than
   against this document. A near-miss here compiles with a protocol warning and
@@ -501,6 +617,12 @@ getNativeVersion` signatures do not change, so `src/index.ts`,
 
 ## 3.1 The spec file
 
+**The sketch below uses the `CodegenTypes.X` namespace form; the real file
+does not.** Same amendment as §2.2 above and the "Minimum React Native
+version" section: that form breaks codegen below RN 0.80.0. The real file
+imports `Double`, `Int32`, `WithDefault`, `DirectEventHandler` directly from
+`react-native/Libraries/Types/CodegenTypes`.
+
 `src/specs/RlottieViewNativeComponent.ts`, sketched (types abbreviated; the real
 file spells them out):
 
@@ -518,8 +640,14 @@ type SourceProp = Readonly<{
 }>;
 
 type ColorOverride = Readonly<{keyPath: string; color: string}>;
-type OpacityOverride = Readonly<{keyPath: string; opacity: CodegenTypes.Double}>;
-type StrokeWidthOverride = Readonly<{keyPath: string; width: CodegenTypes.Double}>;
+type OpacityOverride = Readonly<{
+  keyPath: string;
+  opacity: CodegenTypes.Double;
+}>;
+type StrokeWidthOverride = Readonly<{
+  keyPath: string;
+  width: CodegenTypes.Double;
+}>;
 
 type LoadedEvent = Readonly<{
   width: CodegenTypes.Int32;
@@ -582,22 +710,45 @@ interface NativeProps extends ViewProps {
 }
 
 interface NativeCommands {
-  play: (ref: React.ElementRef<HostComponent<NativeProps>>, startFrame: CodegenTypes.Int32, endFrame: CodegenTypes.Int32) => void;
+  play: (
+    ref: React.ElementRef<HostComponent<NativeProps>>,
+    startFrame: CodegenTypes.Int32,
+    endFrame: CodegenTypes.Int32,
+  ) => void;
   pause: (ref: React.ElementRef<HostComponent<NativeProps>>) => void;
   resume: (ref: React.ElementRef<HostComponent<NativeProps>>) => void;
   stop: (ref: React.ElementRef<HostComponent<NativeProps>>) => void;
   reset: (ref: React.ElementRef<HostComponent<NativeProps>>) => void;
-  seekToProgress: (ref: React.ElementRef<HostComponent<NativeProps>>, progress: CodegenTypes.Double) => void;
-  seekToFrame: (ref: React.ElementRef<HostComponent<NativeProps>>, frame: CodegenTypes.Int32) => void;
+  seekToProgress: (
+    ref: React.ElementRef<HostComponent<NativeProps>>,
+    progress: CodegenTypes.Double,
+  ) => void;
+  seekToFrame: (
+    ref: React.ElementRef<HostComponent<NativeProps>>,
+    frame: CodegenTypes.Int32,
+  ) => void;
   // NOT `setSpeed` — collides with the `speed` prop on Android; see §3.3.
-  setPlaybackSpeed: (ref: React.ElementRef<HostComponent<NativeProps>>, speed: CodegenTypes.Double) => void;
-  playMarker: (ref: React.ElementRef<HostComponent<NativeProps>>, name: string) => void;
+  setPlaybackSpeed: (
+    ref: React.ElementRef<HostComponent<NativeProps>>,
+    speed: CodegenTypes.Double,
+  ) => void;
+  playMarker: (
+    ref: React.ElementRef<HostComponent<NativeProps>>,
+    name: string,
+  ) => void;
 }
 
 export const Commands: NativeCommands = codegenNativeCommands<NativeCommands>({
   supportedCommands: [
-    'play', 'pause', 'resume', 'stop', 'reset',
-    'seekToProgress', 'seekToFrame', 'setPlaybackSpeed', 'playMarker',
+    'play',
+    'pause',
+    'resume',
+    'stop',
+    'reset',
+    'seekToProgress',
+    'seekToFrame',
+    'setPlaybackSpeed',
+    'playMarker',
   ],
 });
 
@@ -644,7 +795,7 @@ string-literal union → a generated `enum class`; plain string → `std::string
   string as absent (`ios/RNRlottieView.mm:625`, `:636` test `length > 0`), and
   under Fabric the signal for "do nothing" is no longer "the setter wasn't
   called" but "the value equals `oldProps`". Also note that when a prop is
-  missing from the raw props, codegen's `convertRawProp` keeps the *previous*
+  missing from the raw props, codegen's `convertRawProp` keeps the _previous_
   value — so a JS `source={undefined}` inherits the last value and compares
   equal, which reproduces exactly the Legacy behaviour that
   `src/RlottieView.tsx` relies on when it drops `source` to `undefined` on a
@@ -723,7 +874,7 @@ does not know.
 
 So: declare both as `WithDefault<string, 'contain'>` / `WithDefault<string, 'model'>`,
 keep the validation in the adapters exactly as it is today, and keep the
-`RlottieResizeMode` / `RlottieCacheStrategy` unions in the *public* `src/types.ts`
+`RlottieResizeMode` / `RlottieCacheStrategy` unions in the _public_ `src/types.ts`
 where they belong. We give up a generated C++ enum and compile-time
 exhaustiveness in return for not introducing an app-kill path into a library
 whose entire posture is "untrusted input, fail typed, never terminate the
@@ -752,20 +903,20 @@ Legacy iOS view sets `_configureDirty = YES` in six setters and flushes in
 
 ### 3.2.5 The rest
 
-| prop | spec type | iOS `Props` field | Android generated setter |
-| --- | --- | --- | --- |
-| `autoPlay` | `WithDefault<boolean, false>` | `bool` | `setAutoPlay(view, boolean)` |
-| `loop` | `WithDefault<boolean, false>` | `bool` | `setLoop(view, boolean)` |
-| `repeatCount` | `WithDefault<Int32, 0>` | `int` | `setRepeatCount(view, int)` |
-| `speed` | `WithDefault<Double, 1.0>` | `double` | `setSpeed(view, double)` |
-| `progress` | `WithDefault<Double, 0.0>` | `double` | `setProgress(view, double)` |
-| `startFrame` | `WithDefault<Int32, 0>` | `int` | `setStartFrame(view, int)` |
-| `endFrame` | `WithDefault<Int32, 0>` | `int` | `setEndFrame(view, int)` |
-| `resizeMode` | `WithDefault<string, 'contain'>` | `std::string` | `setResizeMode(view, String)` |
-| `renderScale` | `WithDefault<Double, 1.0>` | `double` | `setRenderScale(view, double)` |
-| `pauseWhenInactive` | `WithDefault<boolean, true>` | `bool` | `setPauseWhenInactive(view, boolean)` |
-| `cacheStrategy` | `WithDefault<string, 'model'>` | `std::string` | `setCacheStrategy(view, String)` |
-| `metricsEnabled` | `WithDefault<boolean, false>` | `bool` | `setMetricsEnabled(view, boolean)` |
+| prop                | spec type                        | iOS `Props` field | Android generated setter              |
+| ------------------- | -------------------------------- | ----------------- | ------------------------------------- |
+| `autoPlay`          | `WithDefault<boolean, false>`    | `bool`            | `setAutoPlay(view, boolean)`          |
+| `loop`              | `WithDefault<boolean, false>`    | `bool`            | `setLoop(view, boolean)`              |
+| `repeatCount`       | `WithDefault<Int32, 0>`          | `int`             | `setRepeatCount(view, int)`           |
+| `speed`             | `WithDefault<Double, 1.0>`       | `double`          | `setSpeed(view, double)`              |
+| `progress`          | `WithDefault<Double, 0.0>`       | `double`          | `setProgress(view, double)`           |
+| `startFrame`        | `WithDefault<Int32, 0>`          | `int`             | `setStartFrame(view, int)`            |
+| `endFrame`          | `WithDefault<Int32, 0>`          | `int`             | `setEndFrame(view, int)`              |
+| `resizeMode`        | `WithDefault<string, 'contain'>` | `std::string`     | `setResizeMode(view, String)`         |
+| `renderScale`       | `WithDefault<Double, 1.0>`       | `double`          | `setRenderScale(view, double)`        |
+| `pauseWhenInactive` | `WithDefault<boolean, true>`     | `bool`            | `setPauseWhenInactive(view, boolean)` |
+| `cacheStrategy`     | `WithDefault<string, 'model'>`   | `std::string`     | `setCacheStrategy(view, String)`      |
+| `metricsEnabled`    | `WithDefault<boolean, false>`    | `bool`            | `setMetricsEnabled(view, boolean)`    |
 
 `Double` rather than `Float` throughout, matching the current wire types.
 Defaults are copied from `docs/bridge-contract.md`'s Props table and must stay
@@ -812,7 +963,7 @@ Scope and cost:
 - **iOS is unaffected** — props are a C++ struct and commands are a separate
   Obj-C protocol, so `- (void)setSpeed:` never collides. The rename applies
   there too only because the spec is shared.
-- **Nothing frozen changes.** The Fabric command name is a *new* identifier
+- **Nothing frozen changes.** The Fabric command name is a _new_ identifier
   introduced by this work. `docs/bridge-contract.md`'s Legacy command id 8 stays
   named `setSpeed`, and the public JS API stays `ref.setSpeed(v)` — `src/commands.ts`
   already branches on architecture (§3.3, "src/commands.ts"), so it maps the one
@@ -875,7 +1026,7 @@ command methods, and `RlottieViewManagerDelegate.receiveCommand(view, String, ar
 decodes and dispatches to them. Design rule for `RlottieViewManager.kt`:
 
 - Implement the interface's typed methods as the **real bodies** (`play(view,
-  start, end)` → `view.play(start, end)`, and so on).
+start, end)` → `view.play(start, end)`, and so on).
 - Keep `override fun receiveCommand(root, commandId: Int, args)` mapping the
   frozen ids 1–9 onto those same typed methods — the Legacy integer path.
 - Keep `override fun receiveCommand(root, commandId: String, args)` handling the
@@ -955,7 +1106,7 @@ spec, and change Legacy Android to `putDouble` in the same chunk.**
 - `src/types.ts`'s `RlottieMetricsEvent` already types every field as `number`,
   so the public TS surface does not change at all.
 - Leaving Legacy Android on `putInt` while Fabric Android is a double would
-  create a *third* variant. Changing it is a two-line edit
+  create a _third_ variant. Changing it is a two-line edit
   (`RlottieEvents.kt:82-86`) and is observationally identical in JS.
 
 This is a **contract amendment**: `docs/bridge-contract.md`'s Phase 7 field
@@ -1070,20 +1221,20 @@ This is the section to read before writing any code.
 
 Verified in `node_modules/react-native/React/Fabric/Mounting/RCTMountingManager.mm`:
 
-| callback | thread | evidence |
-| --- | --- | --- |
-| `-updateProps:oldProps:` | main | reached from `performTransaction`, `RCTAssertMainQueue()` at `:250` and `:236` |
-| `-updateState:oldState:` | main | same transaction |
-| `-updateEventEmitter:` | main | same transaction |
-| `-updateLayoutMetrics:oldLayoutMetrics:` | main | same transaction |
-| `-finalizeUpdates:` | main | same transaction |
-| `-mountChildComponentView:index:` / `-unmountChildComponentView:index:` | main | same transaction |
-| `-handleCommand:args:` | main | `-dispatchCommand:` hops via `RCTExecuteOnMainQueue` at `:202-214` |
-| `-prepareForRecycle` | main | `RCTComponentViewRegistry.mm:107, 116` |
-| `+componentDescriptorProvider` | any (class method, no state) | — |
+| callback                                                                | thread                       | evidence                                                                       |
+| ----------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
+| `-updateProps:oldProps:`                                                | main                         | reached from `performTransaction`, `RCTAssertMainQueue()` at `:250` and `:236` |
+| `-updateState:oldState:`                                                | main                         | same transaction                                                               |
+| `-updateEventEmitter:`                                                  | main                         | same transaction                                                               |
+| `-updateLayoutMetrics:oldLayoutMetrics:`                                | main                         | same transaction                                                               |
+| `-finalizeUpdates:`                                                     | main                         | same transaction                                                               |
+| `-mountChildComponentView:index:` / `-unmountChildComponentView:index:` | main                         | same transaction                                                               |
+| `-handleCommand:args:`                                                  | main                         | `-dispatchCommand:` hops via `RCTExecuteOnMainQueue` at `:202-214`             |
+| `-prepareForRecycle`                                                    | main                         | `RCTComponentViewRegistry.mm:107, 116`                                         |
+| `+componentDescriptorProvider`                                          | any (class method, no state) | —                                                                              |
 
 `Props` objects are **constructed** on the shadow/background thread during
-`ShadowNode` cloning, but they are only ever *handed to a component view* on
+`ShadowNode` cloning, but they are only ever _handed to a component view_ on
 main. So the component view never touches a prop object concurrently with its
 construction.
 
@@ -1116,7 +1267,7 @@ both `SurfaceMountingManager` (Fabric) and `NativeViewHierarchyManager`
   the two Android decisions CLAUDE.md flags as non-negotiable are simply not
   in scope for this work.
 
-### The one Fabric behaviour that *does* change: full props per commit
+### The one Fabric behaviour that _does_ change: full props per commit
 
 Under Fabric the native side is handed a **complete** prop set on every commit
 that touches the node, not a diff. Concretely, on Android
@@ -1299,7 +1450,7 @@ non-bridgeless runtime `NativeComponentRegistry.get` resolves
 `getNativeComponentAttributes(name)` — the **native** view config from the
 Legacy ViewManager — using the static config only as a fallback
 (`node_modules/react-native/Libraries/NativeComponent/NativeComponentRegistry.js:57-70`).
-Static-config *validation* against the native config only runs when the runtime
+Static-config _validation_ against the native config only runs when the runtime
 config provider asks for it (`verify`), which is not the default. So an
 old-architecture app keeps using exactly the view config it uses today, and a
 spec/native mismatch cannot silently change Legacy behaviour.
@@ -1317,55 +1468,55 @@ work unchanged.
 
 ## Unchanged — the shared core is genuinely architecture-neutral
 
-| file | why untouched |
-| --- | --- |
-| `cpp/RlottiePlayerCore.{h,cpp}` | never sees a platform type; `[worker]`-only contract unaffected |
-| `cpp/RenderCoordinator.{h,cpp}` | `[any]`-thread public API already covers every Fabric caller |
-| `cpp/FrameSink.h` | both adapters keep their existing sinks |
-| `cpp/FrameBuffer.{h,cpp}`, `cpp/PlaybackController.{h,cpp}` | `[UI]`/`[worker]` contracts hold; Fabric callbacks are all UI-thread |
-| `cpp/Metrics.h`, `cpp/InputLimits.h`, `cpp/CacheKey.h`, `cpp/ModelCacheController.{h,cpp}`, `cpp/ErrorCode.h`, `cpp/PixelFormat.h`, `cpp/Sha256.h`, `cpp/AnimationSource.h`, `cpp/AnimationMetadata.h`, `cpp/PlayerError.h`, `cpp/PlaybackState.h`, `cpp/RlottieVersion.h` | pure C++, no RN dependency |
-| `cpp/third_party/rlottie/**` | pinned vendored engine |
-| `android/src/main/cpp/**` (`RlottieJni.cpp`, `JniPlayerHandle.*`, `AndroidFrameSink.*`, `AndroidPixelConvert.h`, `AndroidEventEncoding.h`, `CMakeLists.txt`, `react-native-rlottie.expmap`) | Fabric mounts through the existing Java ViewManager; the codegen C++ lives in a separate `.so` built by the app |
-| `ios/RNRlottieView.{h,mm}` | composed as-is by the Fabric component view (§3.6) |
-| `ios/RNRlottiePlayer.{h,mm}` | owned identically by both adapters |
-| `ios/RNRlottieFramePresenter.{h,mm}` | presentation is arch-independent |
-| `ios/RNRlottieSourceResolver.{h,mm}`, `android/.../RlottieSourceResolver.kt` | still fed an `NSDictionary` / `ReadableMap` |
-| `ios/RNRlottieViewManager.mm` | the Legacy ViewManager; **must not be edited**, or the numeric command ids shift |
-| `src/RlottieView.tsx`, `src/source.ts`, `src/sha256.ts`, `src/types.ts` | no logic change |
-| `tests/cpp/**`, `tests/js/**` | core and JS-normalization tests unaffected |
+| file                                                                                                                                                                                                                                                                       | why untouched                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `cpp/RlottiePlayerCore.{h,cpp}`                                                                                                                                                                                                                                            | never sees a platform type; `[worker]`-only contract unaffected                                                 |
+| `cpp/RenderCoordinator.{h,cpp}`                                                                                                                                                                                                                                            | `[any]`-thread public API already covers every Fabric caller                                                    |
+| `cpp/FrameSink.h`                                                                                                                                                                                                                                                          | both adapters keep their existing sinks                                                                         |
+| `cpp/FrameBuffer.{h,cpp}`, `cpp/PlaybackController.{h,cpp}`                                                                                                                                                                                                                | `[UI]`/`[worker]` contracts hold; Fabric callbacks are all UI-thread                                            |
+| `cpp/Metrics.h`, `cpp/InputLimits.h`, `cpp/CacheKey.h`, `cpp/ModelCacheController.{h,cpp}`, `cpp/ErrorCode.h`, `cpp/PixelFormat.h`, `cpp/Sha256.h`, `cpp/AnimationSource.h`, `cpp/AnimationMetadata.h`, `cpp/PlayerError.h`, `cpp/PlaybackState.h`, `cpp/RlottieVersion.h` | pure C++, no RN dependency                                                                                      |
+| `cpp/third_party/rlottie/**`                                                                                                                                                                                                                                               | pinned vendored engine                                                                                          |
+| `android/src/main/cpp/**` (`RlottieJni.cpp`, `JniPlayerHandle.*`, `AndroidFrameSink.*`, `AndroidPixelConvert.h`, `AndroidEventEncoding.h`, `CMakeLists.txt`, `react-native-rlottie.expmap`)                                                                                | Fabric mounts through the existing Java ViewManager; the codegen C++ lives in a separate `.so` built by the app |
+| `ios/RNRlottieView.{h,mm}`                                                                                                                                                                                                                                                 | composed as-is by the Fabric component view (§3.6)                                                              |
+| `ios/RNRlottiePlayer.{h,mm}`                                                                                                                                                                                                                                               | owned identically by both adapters                                                                              |
+| `ios/RNRlottieFramePresenter.{h,mm}`                                                                                                                                                                                                                                       | presentation is arch-independent                                                                                |
+| `ios/RNRlottieSourceResolver.{h,mm}`, `android/.../RlottieSourceResolver.kt`                                                                                                                                                                                               | still fed an `NSDictionary` / `ReadableMap`                                                                     |
+| `ios/RNRlottieViewManager.mm`                                                                                                                                                                                                                                              | the Legacy ViewManager; **must not be edited**, or the numeric command ids shift                                |
+| `src/RlottieView.tsx`, `src/source.ts`, `src/sha256.ts`, `src/types.ts`                                                                                                                                                                                                    | no logic change                                                                                                 |
+| `tests/cpp/**`, `tests/js/**`                                                                                                                                                                                                                                              | core and JS-normalization tests unaffected                                                                      |
 
 ## New files
 
-| path | contents |
-| --- | --- |
-| `src/specs/RlottieViewNativeComponent.ts` | Fabric component spec + `Commands` (§3.1) |
-| `src/specs/NativeRlottieModule.ts` | TurboModule spec (§2.2) |
-| `ios/fabric/RNRlottieComponentView.h` | `RCTViewComponentView` subclass declaration, inside `#ifdef RCT_NEW_ARCH_ENABLED` |
-| `ios/fabric/RNRlottieComponentView.mm` | the whole iOS Fabric adapter (§3.6) |
-| `android/src/main/java/com/rlottie/RlottieEvent.kt` | one `Event<RlottieEvent>` subclass, `canCoalesce() = false` (§3.4.3) |
-| `docs/new-architecture-design.md` | this document |
+| path                                                | contents                                                                          |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `src/specs/RlottieViewNativeComponent.ts`           | Fabric component spec + `Commands` (§3.1)                                         |
+| `src/specs/NativeRlottieModule.ts`                  | TurboModule spec (§2.2)                                                           |
+| `ios/fabric/RNRlottieComponentView.h`               | `RCTViewComponentView` subclass declaration, inside `#ifdef RCT_NEW_ARCH_ENABLED` |
+| `ios/fabric/RNRlottieComponentView.mm`              | the whole iOS Fabric adapter (§3.6)                                               |
+| `android/src/main/java/com/rlottie/RlottieEvent.kt` | one `Event<RlottieEvent>` subclass, `canCoalesce() = false` (§3.4.3)              |
+| `docs/new-architecture-design.md`                   | this document                                                                     |
 
 ## Modified files
 
-| path | change | risk |
-| --- | --- | --- |
-| `package.json` | add `codegenConfig`; add `src/specs` assertions to the package-verify script | low |
-| `react-native.config.js` | pin `libraryName`, `componentDescriptors`, `cmakeListsPath` | low |
-| `react-native-rlottie.podspec` | `require react_native_pods`; add `ios/fabric/**` to `core`'s `source_files`; `install_modules_dependencies(s)` **last**; drop the now-ineffective `c++17` pin | **medium** — C++20 for the core, pod graph growth |
-| `android/build.gradle` | `apply plugin: "com.facebook.react"` + buildscript classpath + `react { reactNativeDir }` | **medium** — must keep the standalone build working |
-| `scripts/check-android-build.sh` | supply what the RN Gradle plugin needs standalone | medium |
-| `ios/RNRlottieModule.mm` | conform to the generated spec protocol, add `getTurboModule:`, switch `RCT_REMAP_METHOD` → `RCT_EXPORT_METHOD` with codegen selectors | medium — selector names must match generated output exactly |
-| `android/.../RlottieModule.kt` | extend `NativeRlottieModuleSpec`; drop `getName()`/`NAME` | low |
-| `android/.../RlottiePackage.kt` | `BaseReactPackage` with `getModule` + `getReactModuleInfoProvider` | low |
-| `android/.../RlottieViewManager.kt` | implement `RlottieViewManagerInterface`, add `getDelegate()`, add the three change-guards from §3.5, route the String `receiveCommand` through `super` | **high** — the change-guards are correctness-critical and easy to get subtly wrong |
-| `android/.../RlottieEvents.kt` | dispatch via `EventDispatcher`; register both `onX` and `topX` keys; `putInt` → `putDouble` for the five counters | medium |
-| `android/.../RlottieView.kt` | `RlottieMetricsInfo` counters `Int` → `Double`; drop `coerceAtMostInt` | low |
-| `src/RlottieNativeComponent.ts` | re-export the spec's component; keep `RlottieNativeProps` | low |
-| `src/commands.ts` | add the new-architecture dispatch branch (§3.3) | low |
-| `src/RlottieModule.ts` | resolve through the spec's default export | low |
-| `docs/bridge-contract.md` | Phase 7 table `int` → `double`; a new "New Architecture" section stating that numeric command ids are Legacy-only | low |
-| `docs/api-reference.md`, `README.md`, `CHANGELOG.md`, `CLAUDE.md` | document dual-arch support and the RN >= 0.76 floor for it | low |
-| `example/ios/Podfile`, `example/android/gradle.properties` | make the architecture togglable instead of hardcoded off | low |
+| path                                                              | change                                                                                                                                                        | risk                                                                               |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `package.json`                                                    | add `codegenConfig`; add `src/specs` assertions to the package-verify script                                                                                  | low                                                                                |
+| `react-native.config.js`                                          | pin `libraryName`, `componentDescriptors`, `cmakeListsPath`                                                                                                   | low                                                                                |
+| `react-native-rlottie.podspec`                                    | `require react_native_pods`; add `ios/fabric/**` to `core`'s `source_files`; `install_modules_dependencies(s)` **last**; drop the now-ineffective `c++17` pin | **medium** — C++20 for the core, pod graph growth                                  |
+| `android/build.gradle`                                            | `apply plugin: "com.facebook.react"` + buildscript classpath + `react { reactNativeDir }`                                                                     | **medium** — must keep the standalone build working                                |
+| `scripts/check-android-build.sh`                                  | supply what the RN Gradle plugin needs standalone                                                                                                             | medium                                                                             |
+| `ios/RNRlottieModule.mm`                                          | conform to the generated spec protocol, add `getTurboModule:`, switch `RCT_REMAP_METHOD` → `RCT_EXPORT_METHOD` with codegen selectors                         | medium — selector names must match generated output exactly                        |
+| `android/.../RlottieModule.kt`                                    | extend `NativeRlottieModuleSpec`; drop `getName()`/`NAME`                                                                                                     | low                                                                                |
+| `android/.../RlottiePackage.kt`                                   | `BaseReactPackage` with `getModule` + `getReactModuleInfoProvider`                                                                                            | low                                                                                |
+| `android/.../RlottieViewManager.kt`                               | implement `RlottieViewManagerInterface`, add `getDelegate()`, add the three change-guards from §3.5, route the String `receiveCommand` through `super`        | **high** — the change-guards are correctness-critical and easy to get subtly wrong |
+| `android/.../RlottieEvents.kt`                                    | dispatch via `EventDispatcher`; register both `onX` and `topX` keys; `putInt` → `putDouble` for the five counters                                             | medium                                                                             |
+| `android/.../RlottieView.kt`                                      | `RlottieMetricsInfo` counters `Int` → `Double`; drop `coerceAtMostInt`                                                                                        | low                                                                                |
+| `src/RlottieNativeComponent.ts`                                   | re-export the spec's component; keep `RlottieNativeProps`                                                                                                     | low                                                                                |
+| `src/commands.ts`                                                 | add the new-architecture dispatch branch (§3.3)                                                                                                               | low                                                                                |
+| `src/RlottieModule.ts`                                            | resolve through the spec's default export                                                                                                                     | low                                                                                |
+| `docs/bridge-contract.md`                                         | Phase 7 table `int` → `double`; a new "New Architecture" section stating that numeric command ids are Legacy-only                                             | low                                                                                |
+| `docs/api-reference.md`, `README.md`, `CHANGELOG.md`, `CLAUDE.md` | document dual-arch support and the RN >= 0.76 floor for it                                                                                                    | low                                                                                |
+| `example/ios/Podfile`, `example/android/gradle.properties`        | make the architecture togglable instead of hardcoded off                                                                                                      | low                                                                                |
 
 ---
 
@@ -1381,15 +1532,16 @@ integration comes second on each platform because a spec that does not generate
 is not a spec.
 
 ### Chunk 9.1 — Codegen specs + package plumbing
-| | |
-|---|---|
-| **Goal** | The two spec files and `codegenConfig` exist and produce correct artifacts on both platforms. |
-| **Depends on** | — |
-| **Deliverables** | `src/specs/RlottieViewNativeComponent.ts`, `src/specs/NativeRlottieModule.ts`, `codegenConfig` in `package.json`, pinned `react-native.config.js`, package-verify assertions. |
-| **Contract** | Spec content per §3.1/§2.2. Filenames are load-bearing (§1.1). `type: "all"`. `resizeMode`/`cacheStrategy` are `string`, not unions (§3.2.3). Metrics counters are `Double` (§3.4.1). Lifecycle events are `DirectEventHandler<null>`. |
-| **Acceptance** | `npx @react-native-community/cli codegen` (or the RN 0.76 equivalent) produces, and the chunk **reads and records**: `RlottieViewComponentDescriptor`, `RlottieViewProps` with the field types this document claims, `RlottieViewEventEmitter` with seven methods, `RCTRlottieViewViewProtocol` with nine command selectors, `RlottieViewManagerInterface`/`Delegate` in `com.facebook.react.viewmanagers`, `NativeRlottieModuleSpec` in `com.rlottie.spec`. Any divergence from §3 is reported and this document amended **before** any platform chunk starts. `npm run typecheck` and `npm run lint` pass. |
-| **Agent** | RNEngineer |
-| **Risks** | `Readonly<{}>`-style edge cases and the exact generated selector/method names are the two things most likely to differ from this document. Empty-payload events are handled by the parser (`parsers-commons.js:1107-1114`) but that path is worth eyeballing in the output. |
+
+|                  |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Goal**         | The two spec files and `codegenConfig` exist and produce correct artifacts on both platforms.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Depends on**   | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Deliverables** | `src/specs/RlottieViewNativeComponent.ts`, `src/specs/NativeRlottieModule.ts`, `codegenConfig` in `package.json`, pinned `react-native.config.js`, package-verify assertions.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Contract**     | Spec content per §3.1/§2.2. Filenames are load-bearing (§1.1). `type: "all"`. `resizeMode`/`cacheStrategy` are `string`, not unions (§3.2.3). Metrics counters are `Double` (§3.4.1). Lifecycle events are `DirectEventHandler<null>`.                                                                                                                                                                                                                                                                                                                                                                       |
+| **Acceptance**   | `npx @react-native-community/cli codegen` (or the RN 0.76 equivalent) produces, and the chunk **reads and records**: `RlottieViewComponentDescriptor`, `RlottieViewProps` with the field types this document claims, `RlottieViewEventEmitter` with seven methods, `RCTRlottieViewViewProtocol` with nine command selectors, `RlottieViewManagerInterface`/`Delegate` in `com.facebook.react.viewmanagers`, `NativeRlottieModuleSpec` in `com.rlottie.spec`. Any divergence from §3 is reported and this document amended **before** any platform chunk starts. `npm run typecheck` and `npm run lint` pass. |
+| **Agent**        | RNEngineer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Risks**        | `Readonly<{}>`-style edge cases and the exact generated selector/method names are the two things most likely to differ from this document. Empty-payload events are handled by the parser (`parsers-commons.js:1107-1114`) but that path is worth eyeballing in the output.                                                                                                                                                                                                                                                                                                                                  |
 
 **Status: done.** `src/specs/RlottieViewNativeComponent.ts` and
 `src/specs/NativeRlottieModule.ts` exist; `codegenConfig` and
@@ -1422,6 +1574,17 @@ file and worth recording so a future edit to that file doesn't reintroduce them:
   type is therefore inlined directly in the spec rather than pulled out as its
   own named type.
 
+**A third divergence was found later, only by installing RN 0.77 and running
+codegen against it: the namespaced `CodegenTypes.X` form this section
+recommended breaks codegen below RN 0.80.0** (`getTypeAnnotationName` cannot
+resolve a `TSQualifiedName` until that version). Both spec files now import
+`Double`/`Int32`/`WithDefault`/`DirectEventHandler`/`UnsafeObject` directly
+from `react-native/Libraries/Types/CodegenTypes` instead — verified clean
+against real `@react-native/codegen` at 0.76.0, 0.77.0, 0.77.3, 0.80.0, and
+0.81.0. See the "Minimum React Native version" section and §1.1's amendment
+for the full account; this note exists so a future edit to either spec file
+doesn't reintroduce the namespaced form.
+
 One environment note for Chunk 9.2: the standalone `generate-codegen-artifacts.js`
 path hardcodes the TurboModule spec's Java package to
 `com.facebook.fbreact.specs` regardless of `codegenConfig.android.javaPackageName`
@@ -1430,15 +1593,16 @@ setting. Not a defect in the spec files; `com.rlottie.spec` can only be
 confirmed end-to-end once 9.2 wires up the actual Gradle build.
 
 ### Chunk 9.2 — Android build integration
-| | |
-|---|---|
-| **Goal** | Codegen runs for this library under Gradle, on both architectures, and the standalone build still produces an AAR. |
-| **Depends on** | 9.1 |
-| **Deliverables** | `android/build.gradle`, `scripts/check-android-build.sh`. |
-| **Contract** | §1.5. Generated Java on the main source set with **no** `src/newarch`/`src/oldarch` split. `android/src/main/cpp/**` and the expmap untouched. |
-| **Acceptance** | `scripts/check-android-build.sh --link` still passes and the `Java_com_rlottie_*` symbols are still exported. `build/generated/source/codegen/{java,jni}` both populated. A standalone build still yields an AAR containing every Kotlin class plus both ABIs' `.so`. |
-| **Agent** | RNEngineer |
-| **Risks** | The standalone build is the likely casualty; it has broken silently before (Chunk 3.5). |
+
+|                  |                                                                                                                                                                                                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | Codegen runs for this library under Gradle, on both architectures, and the standalone build still produces an AAR.                                                                                                                                                    |
+| **Depends on**   | 9.1                                                                                                                                                                                                                                                                   |
+| **Deliverables** | `android/build.gradle`, `scripts/check-android-build.sh`.                                                                                                                                                                                                             |
+| **Contract**     | §1.5. Generated Java on the main source set with **no** `src/newarch`/`src/oldarch` split. `android/src/main/cpp/**` and the expmap untouched.                                                                                                                        |
+| **Acceptance**   | `scripts/check-android-build.sh --link` still passes and the `Java_com_rlottie_*` symbols are still exported. `build/generated/source/codegen/{java,jni}` both populated. A standalone build still yields an AAR containing every Kotlin class plus both ABIs' `.so`. |
+| **Agent**        | RNEngineer                                                                                                                                                                                                                                                            |
+| **Risks**        | The standalone build is the likely casualty; it has broken silently before (Chunk 3.5).                                                                                                                                                                               |
 
 **Status: done, with one blocking issue found and left for a later chunk to
 fix.** `android/build.gradle` applies `com.facebook.react` (buildscript
@@ -1481,10 +1645,10 @@ Verified with a real Gradle invocation — `node_modules/@react-native/gradle-pl
 - `android/settings.gradle` and `android/gradle.properties` are **excluded from
   the npm tarball** (`package.json`'s `files`). Both exist only so `android/`
   can build as its own Gradle root project; a consumer includes this library as
-  a *subproject*, where Gradle reads neither file. Shipping them is inert in
+  a _subproject_, where Gradle reads neither file. Shipping them is inert in
   normal autolinking but would misfire for anyone doing
   `includeBuild(...)` on the installed package, since this
-  `settings.gradle` resolves the RN Gradle plugin via a path relative to *this*
+  `settings.gradle` resolves the RN Gradle plugin via a path relative to _this_
   repo's `node_modules`.
 
 **A real, blocking bug was found in Chunk 9.1's spec here, and has since been
@@ -1506,14 +1670,15 @@ immediately after this chunk; the generated interface now declares 16 prop
 setters and 9 command methods with no duplicate erasure.
 
 ### Chunk 9.3 — Android TurboModule + package
-| | |
-|---|---|
-| **Goal** | `RlottieModule` works as a TurboModule and as a legacy module from one class. |
-| **Depends on** | 9.2 |
-| **Deliverables** | `RlottieModule.kt`, `RlottiePackage.kt`. |
-| **Contract** | §2.4. All three methods stay Promise-based. Bodies unchanged. `BaseReactPackage`, `isTurboModule = true`. |
-| **Acceptance** | `configure`/`clearModelCache`/`getNativeVersion` resolve identically with `newArchEnabled` true and false; `getNativeVersion` returns the pinned SHA in both. |
-| **Agent** | RNEngineer |
+
+|                  |                                                                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | `RlottieModule` works as a TurboModule and as a legacy module from one class.                                                                                 |
+| **Depends on**   | 9.2                                                                                                                                                           |
+| **Deliverables** | `RlottieModule.kt`, `RlottiePackage.kt`.                                                                                                                      |
+| **Contract**     | §2.4. All three methods stay Promise-based. Bodies unchanged. `BaseReactPackage`, `isTurboModule = true`.                                                     |
+| **Acceptance**   | `configure`/`clearModelCache`/`getNativeVersion` resolve identically with `newArchEnabled` true and false; `getNativeVersion` returns the pinned SHA in both. |
+| **Agent**        | RNEngineer                                                                                                                                                    |
 
 **Status: done.** The generated `NativeRlottieModuleSpec` (read from
 `android/build/generated/source/codegen/java/com/rlottie/spec/NativeRlottieModuleSpec.java`
@@ -1566,15 +1731,16 @@ This chunk's result should be re-verified with a plain `--gradle` run once
 Chunk 9.4 lands and the tree is consistent again.
 
 ### Chunk 9.4 — Android event dispatch unification + metrics wire type
-| | |
-|---|---|
-| **Goal** | One event path for both architectures, and the int/uint64 divergence closed. |
-| **Depends on** | 9.2 |
-| **Deliverables** | `RlottieEvent.kt` (new), `RlottieEvents.kt`, `RlottieViewManager.kt` (emit call sites), `RlottieView.kt` (`RlottieMetricsInfo` types), `docs/bridge-contract.md` amendment. |
-| **Contract** | §3.4.1 and §3.4.3. `canCoalesce() = false` on every event. Dispatch `topX`; register both `onX` and `topX`. `putDouble` for the five counters. |
-| **Acceptance** | All seven events arrive with identical payloads on both architectures. A dedicated test/manual check proves **two `onAnimationLoop` events in one batch both arrive** — the coalescing trap. `onMetrics` still fires at most once per second and not at all when `metricsEnabled` is false. |
-| **Agent** | RNEngineer |
-| **Risks** | Silent event loss is the failure mode; only an explicit two-in-one-batch check catches it. |
+
+|                  |                                                                                                                                                                                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | One event path for both architectures, and the int/uint64 divergence closed.                                                                                                                                                                                                                |
+| **Depends on**   | 9.2                                                                                                                                                                                                                                                                                         |
+| **Deliverables** | `RlottieEvent.kt` (new), `RlottieEvents.kt`, `RlottieViewManager.kt` (emit call sites), `RlottieView.kt` (`RlottieMetricsInfo` types), `docs/bridge-contract.md` amendment.                                                                                                                 |
+| **Contract**     | §3.4.1 and §3.4.3. `canCoalesce() = false` on every event. Dispatch `topX`; register both `onX` and `topX`. `putDouble` for the five counters.                                                                                                                                              |
+| **Acceptance**   | All seven events arrive with identical payloads on both architectures. A dedicated test/manual check proves **two `onAnimationLoop` events in one batch both arrive** — the coalescing trap. `onMetrics` still fires at most once per second and not at all when `metricsEnabled` is false. |
+| **Agent**        | RNEngineer                                                                                                                                                                                                                                                                                  |
+| **Risks**        | Silent event loss is the failure mode; only an explicit two-in-one-batch check catches it.                                                                                                                                                                                                  |
 
 **Status: done.** `android/src/main/java/com/rlottie/RlottieEvent.kt` (new) is
 the one `Event<RlottieEvent>` subclass all seven events now dispatch through,
@@ -1617,15 +1783,16 @@ that check regardless of key), but the on-device confirmation itself is left
 for Chunk 9.10's device verification matrix.
 
 ### Chunk 9.5 — Android Fabric component
-| | |
-|---|---|
-| **Goal** | `RlottieView` mounts and behaves identically under Fabric. |
-| **Depends on** | 9.4 |
-| **Deliverables** | `RlottieViewManager.kt`. |
-| **Contract** | §3.3 (commands), §3.5 (the three change-guards). Implement `RlottieViewManagerInterface`, return `RlottieViewManagerDelegate` from `getDelegate()`, **keep** the `@ReactProp` annotations (Legacy's native view config is reflected from them), keep both `receiveCommand` overloads. `RlottieView.kt` gains no new behaviour. |
-| **Acceptance** | Every prop, all nine commands, all seven events verified under Fabric. Explicitly: an unrelated style-only re-render does **not** re-resolve `source`, does **not** re-issue `configure()`, and does **not** seek — the §3.5 hazards. Playback timing under repeated commits matches Legacy. |
-| **Agent** | RNEngineer |
-| **Risks** | Highest-risk Android chunk. The change-guards are the whole game; without them the animation restarts on unrelated renders, which will look like "Fabric is broken" rather than "a guard is missing". |
+
+|                  |                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Goal**         | `RlottieView` mounts and behaves identically under Fabric.                                                                                                                                                                                                                                                                     |
+| **Depends on**   | 9.4                                                                                                                                                                                                                                                                                                                            |
+| **Deliverables** | `RlottieViewManager.kt`.                                                                                                                                                                                                                                                                                                       |
+| **Contract**     | §3.3 (commands), §3.5 (the three change-guards). Implement `RlottieViewManagerInterface`, return `RlottieViewManagerDelegate` from `getDelegate()`, **keep** the `@ReactProp` annotations (Legacy's native view config is reflected from them), keep both `receiveCommand` overloads. `RlottieView.kt` gains no new behaviour. |
+| **Acceptance**   | Every prop, all nine commands, all seven events verified under Fabric. Explicitly: an unrelated style-only re-render does **not** re-resolve `source`, does **not** re-issue `configure()`, and does **not** seek — the §3.5 hazards. Playback timing under repeated commits matches Legacy.                                   |
+| **Agent**        | RNEngineer                                                                                                                                                                                                                                                                                                                     |
+| **Risks**        | Highest-risk Android chunk. The change-guards are the whole game; without them the animation restarts on unrelated renders, which will look like "Fabric is broken" rather than "a guard is missing".                                                                                                                          |
 
 **Status: done, on-device confirmation deferred to Chunk 9.10.**
 `android/src/main/java/com/rlottie/RlottieViewManager.kt` now implements the
@@ -1659,7 +1826,7 @@ per-view, unchanged in shape from before this chunk):
 
 - **`source`**: a new `SourceIdentity(cacheKey, path, uri, resourcePath)` is
   computed from the incoming `ReadableMap` and compared against
-  `ViewState.lastSource` *before* calling `RlottieSourceResolver.resolve(...)`
+  `ViewState.lastSource` _before_ calling `RlottieSourceResolver.resolve(...)`
   — an unchanged source never reaches the resolver at all. Per §3.2.1, an
   empty `cacheKey` on either side forces "changed" conservatively; `json` is
   never read for comparison.
@@ -1700,15 +1867,16 @@ running app on the new architecture, which is Chunk 9.10's device
 verification matrix. Do not treat this status note as that confirmation.
 
 ### Chunk 9.6 — iOS build integration
-| | |
-|---|---|
-| **Goal** | The podspec supports both architectures and the codegen artifacts are reachable. |
-| **Depends on** | 9.1 |
-| **Deliverables** | `react-native-rlottie.podspec`. |
-| **Contract** | §1.4. `install_modules_dependencies(s)` last. Fabric sources always in `source_files`, guarded by `#ifdef RCT_NEW_ARCH_ENABLED`. |
-| **Acceptance** | `pod install` and a full app build succeed with `RCT_NEW_ARCH_ENABLED` both `0` and `1`. **rlottie still compiles** despite the C++20 switch (its per-file `-std=gnu++14` must still win). The shared core compiles clean as C++20. |
-| **Agent** | RNEngineer, with CPPEngineer on the C++20 question |
-| **Risks** | The C++20 promotion of the shared core is the one change here that touches shipped code semantics. |
+
+|                  |                                                                                                                                                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | The podspec supports both architectures and the codegen artifacts are reachable.                                                                                                                                                    |
+| **Depends on**   | 9.1                                                                                                                                                                                                                                 |
+| **Deliverables** | `react-native-rlottie.podspec`.                                                                                                                                                                                                     |
+| **Contract**     | §1.4. `install_modules_dependencies(s)` last. Fabric sources always in `source_files`, guarded by `#ifdef RCT_NEW_ARCH_ENABLED`.                                                                                                    |
+| **Acceptance**   | `pod install` and a full app build succeed with `RCT_NEW_ARCH_ENABLED` both `0` and `1`. **rlottie still compiles** despite the C++20 switch (its per-file `-std=gnu++14` must still win). The shared core compiles clean as C++20. |
+| **Agent**        | RNEngineer, with CPPEngineer on the C++20 question                                                                                                                                                                                  |
+| **Risks**        | The C++20 promotion of the shared core is the one change here that touches shipped code semantics.                                                                                                                                  |
 
 **Status: done.** `react-native-rlottie.podspec` now `require`s
 `react_native_pods.rb` (resolved via `node --print require.resolve`, so it
@@ -1736,13 +1904,13 @@ Xcode 26.6):
   behaviour by inspection: `CLANG_CXX_LANGUAGE_STANDARD = c++20`, our
   `HEADER_SEARCH_PATHS` appended after RN's own entries (preserved, not
   lost), and — only in the new-arch run — `OTHER_CPLUSPLUSFLAGS = $(inherited)
-  -DRCT_NEW_ARCH_ENABLED=1`. The generated `Pods.xcodeproj` shows each
+-DRCT_NEW_ARCH_ENABLED=1`. The generated `Pods.xcodeproj` shows each
   rlottie source's `PBXBuildFile.settings.COMPILER_FLAGS` still carrying
   `-std=gnu++14 -fno-exceptions -fno-rtti -U__ARM_NEON__ -DNDEBUG -w`
   per-file, i.e. unaffected by the target-level c++20 switch.
 - A full `xcodebuild … -sdk iphonesimulator build` of `RlottieExample`
   reached **`** BUILD SUCCEEDED **`** with `fabric_enabled: true,
-  new_arch_enabled: true`. `libreact-native-rlottie.a` was produced for both
+new_arch_enabled: true`. `libreact-native-rlottie.a` was produced for both
   `arm64` and `x86_64`, containing compiled objects for every `cpp/*.cpp`
   file and every `ios/*.mm` file (including `RNRlottieView.o`,
   `RNRlottieViewManager.o`) with empty `.dia` diagnostics — a real compile,
@@ -1755,7 +1923,7 @@ Xcode 26.6):
   `PlaybackController.cpp`, `RenderCoordinator.cpp`,
   `ModelCacheController.cpp`, plus `android/src/main/cpp/JniPlayerHandle.cpp`
   and `AndroidFrameSink.cpp`, were compiled with `-std=c++20 -Wall -Wextra
-  -Werror` on the host (clang, arm64 macOS) — first as a `-fsyntax-only`
+-Werror` on the host (clang, arm64 macOS) — first as a `-fsyntax-only`
   pass per file, then as a full build linked against vendored rlottie
   compiled at `-std=c++14` (the exact mixed-standard shape
   `install_modules_dependencies` produces) and the existing
@@ -1769,20 +1937,21 @@ Xcode 26.6):
 
 Not verified here, left for later chunks: the iOS `ios/fabric/` component
 view itself does not exist yet (Chunk 9.8), so the new-arch build above
-proves the *build system* accepts a Fabric-enabled configuration and that
+proves the _build system_ accepts a Fabric-enabled configuration and that
 existing Legacy iOS code still compiles under it — not that a Fabric
 component actually renders. Device-level (vs. simulator-level) verification
 is Chunk 9.10's.
 
 ### Chunk 9.7 — iOS TurboModule
-| | |
-|---|---|
-| **Goal** | `RNRlottieModule` satisfies the generated protocol and works on both architectures. |
-| **Depends on** | 9.6 |
-| **Deliverables** | `ios/RNRlottieModule.mm`. |
-| **Contract** | §2.3. Selectors must match the generated header, verified against the real file rather than this document. Bodies unchanged. |
-| **Acceptance** | Same three calls resolve identically on both architectures; parity with Android's error contract preserved. |
-| **Agent** | RNEngineer |
+
+|                  |                                                                                                                              |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | `RNRlottieModule` satisfies the generated protocol and works on both architectures.                                          |
+| **Depends on**   | 9.6                                                                                                                          |
+| **Deliverables** | `ios/RNRlottieModule.mm`.                                                                                                    |
+| **Contract**     | §2.3. Selectors must match the generated header, verified against the real file rather than this document. Bodies unchanged. |
+| **Acceptance**   | Same three calls resolve identically on both architectures; parity with Android's error contract preserved.                  |
+| **Agent**        | RNEngineer                                                                                                                   |
 
 **Status: done.** `ios/RNRlottieModule.mm` was modified in place. It keeps
 `RCT_EXPORT_MODULE(RlottieModule)` and `+requiresMainQueueSetup` → `NO`, adds
@@ -1796,7 +1965,7 @@ The one real hazard here was the selectors, and it was closed by reading the
 `RCT_REMAP_METHOD`, which invents its own selector
 (`configureWithOptions:resolver:rejecter:`) that the generated protocol does
 not declare — a mismatch compiles with only a protocol warning and fails at
-runtime with "method not found", but *only* under the new architecture. The
+runtime with "method not found", but _only_ under the new architecture. The
 protocol in
 `build/generated/ios/RNRlottieSpec/RNRlottieSpec.h` declares exactly:
 
@@ -1815,15 +1984,16 @@ so the file now uses plain `RCT_EXPORT_METHOD` producing `configure:resolve:reje
 regenerated header, not against this document.
 
 ### Chunk 9.8 — iOS Fabric component view
-| | |
-|---|---|
-| **Goal** | A Fabric component view that owns the existing `RNRlottieView` and reproduces the frozen contract. |
-| **Depends on** | 9.6, 9.7 |
-| **Deliverables** | `ios/fabric/RNRlottieComponentView.h/.mm`. |
-| **Contract** | §3.6 in full. Composition, not reimplementation — **`ios/RNRlottieView.mm` must show a zero diff**. `-finalizeUpdates:` → `didSetProps:`. `-updateLayoutMetrics:` → child frame → existing debounce. Emitter cached on main, null-checked, emitted from main only. `+shouldBeRecycled` → `NO`, `-prepareForRecycle` → full teardown anyway. |
-| **Acceptance** | All 13 props, nine commands, seven events verified under Fabric. Mount/unmount repeatedly with no leak (`tests/run-tests.sh leaks` still 0, plus an on-device pass). No event after unmount. Resize keeps the last frame. Background/foreground pause-resume matches Legacy. `git diff --stat ios/RNRlottieView.mm` is empty. |
-| **Agent** | RNEngineer, with CPPArchitect/CPPEngineer reviewing the ownership and emitter-lifetime boundary |
-| **Risks** | Largest new-code chunk. The recycling and emitter-lifetime hazards are the ones that produce late, confusing bugs rather than immediate failures. |
+
+|                  |                                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | A Fabric component view that owns the existing `RNRlottieView` and reproduces the frozen contract.                                                                                                                                                                                                                                          |
+| **Depends on**   | 9.6, 9.7                                                                                                                                                                                                                                                                                                                                    |
+| **Deliverables** | `ios/fabric/RNRlottieComponentView.h/.mm`.                                                                                                                                                                                                                                                                                                  |
+| **Contract**     | §3.6 in full. Composition, not reimplementation — **`ios/RNRlottieView.mm` must show a zero diff**. `-finalizeUpdates:` → `didSetProps:`. `-updateLayoutMetrics:` → child frame → existing debounce. Emitter cached on main, null-checked, emitted from main only. `+shouldBeRecycled` → `NO`, `-prepareForRecycle` → full teardown anyway. |
+| **Acceptance**   | All 13 props, nine commands, seven events verified under Fabric. Mount/unmount repeatedly with no leak (`tests/run-tests.sh leaks` still 0, plus an on-device pass). No event after unmount. Resize keeps the last frame. Background/foreground pause-resume matches Legacy. `git diff --stat ios/RNRlottieView.mm` is empty.               |
+| **Agent**        | RNEngineer, with CPPArchitect/CPPEngineer reviewing the ownership and emitter-lifetime boundary                                                                                                                                                                                                                                             |
+| **Risks**        | Largest new-code chunk. The recycling and emitter-lifetime hazards are the ones that produce late, confusing bugs rather than immediate failures.                                                                                                                                                                                           |
 
 **Status: done, host-build-verified.** `ios/fabric/RNRlottieComponentView.h/.mm`
 implement §3.6 exactly, coded against the real generated headers (regenerated
@@ -1839,7 +2009,7 @@ via `node node_modules/react-native/scripts/generate-codegen-artifacts.js -p .
   `std::vector<...>` fields, same no-`operator==` shape.
 - `facebook::react::RlottieViewEventEmitter` (`EventEmitters.h`) declares
   `onAnimationLoaded/onAnimationError/onAnimationStart/onAnimationPause/
-  onAnimationLoop/onAnimationFinish/onMetrics`, each taking a plain value
+onAnimationLoop/onAnimationFinish/onMetrics`, each taking a plain value
   struct; the four lifecycle ones (`OnAnimationStart` etc.) are empty structs,
   not `void` — call sites pass `{}`. `OnMetrics`'s eleven fields are all
   `double`, matching Chunk 9.4's amendment.
@@ -1860,7 +2030,7 @@ Implementation notes beyond what §3.6 already specifies:
   directly — no `RN_SERIALIZABLE_STATE` dependency anywhere.
 - `source` is rebuilt into an `NSDictionary` (only the non-empty fields are
   added) and handed to the existing `RNRlottieSourceResolver.resolveSource:
-  errorCode:errorMessage:`, exactly mirroring `RNRlottieViewManager.mm`'s
+errorCode:errorMessage:`, exactly mirroring `RNRlottieViewManager.mm`'s
   `RCT_CUSTOM_VIEW_PROPERTY(source, ...)` body; an all-empty struct (the
   default on mount) produces an empty dictionary, which is treated as "no
   source" (`_view.pendingSource = nil`), the same no-op Legacy already has for
@@ -1919,14 +2089,15 @@ generated headers under the real new-architecture Pod graph — not functional
 behavior.
 
 ### Chunk 9.9 — JS layer
-| | |
-|---|---|
-| **Goal** | The public JS surface drives whichever architecture is active. |
-| **Depends on** | 9.5, 9.8 |
-| **Deliverables** | `src/RlottieNativeComponent.ts`, `src/commands.ts`, `src/RlottieModule.ts`. |
-| **Contract** | §3.8, §3.3, §2.5. `dispatchRlottieCommand` keeps never-throws and returns-false-for-unmounted on both branches. `dispatchRlottieCommand` stays unexported; `RlottieCommand` stays reference-only. `src/index.ts` and every public type unchanged. |
-| **Acceptance** | `npm run test:js`, `npm run typecheck`, `npm run lint` pass. `ref.play()` racing mount is still safe on both architectures. |
-| **Agent** | RNEngineer |
+
+|                  |                                                                                                                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | The public JS surface drives whichever architecture is active.                                                                                                                                                                                    |
+| **Depends on**   | 9.5, 9.8                                                                                                                                                                                                                                          |
+| **Deliverables** | `src/RlottieNativeComponent.ts`, `src/commands.ts`, `src/RlottieModule.ts`.                                                                                                                                                                       |
+| **Contract**     | §3.8, §3.3, §2.5. `dispatchRlottieCommand` keeps never-throws and returns-false-for-unmounted on both branches. `dispatchRlottieCommand` stays unexported; `RlottieCommand` stays reference-only. `src/index.ts` and every public type unchanged. |
+| **Acceptance**   | `npm run test:js`, `npm run typecheck`, `npm run lint` pass. `ref.play()` racing mount is still safe on both architectures.                                                                                                                       |
+| **Agent**        | RNEngineer                                                                                                                                                                                                                                        |
 
 **Status: done.**
 
@@ -1963,7 +2134,7 @@ behavior.
 **A real gap in the JS test harness was found and fixed, not worked around.**
 `tests/js/run-tests.sh` compiled `src/` and pointed a single stub file,
 `tests/js/stubs/react-native.js`, at `require('react-native')`. That was
-sufficient through Chunk 9.8 because nothing under test imported a *subpath* of
+sufficient through Chunk 9.8 because nothing under test imported a _subpath_ of
 `react-native`. `specs/RlottieViewNativeComponent.ts` and
 `specs/NativeRlottieModule.ts` do — `codegenNativeCommands`/`codegenNativeComponent`
 from `react-native/Libraries/Utilities/...`, both Flow source — and Node's module
@@ -2032,15 +2203,16 @@ skipping. Dates from Chunk 4.3, unrelated to the new architecture, but worth
 recording because the failure mode is silent and misleading.
 
 ### Chunk 9.10 — Dual-architecture example app, verification matrix, docs
-| | |
-|---|---|
-| **Goal** | Both architectures demonstrably work on device, and the docs say what is supported. |
-| **Depends on** | 9.9 |
-| **Deliverables** | `example/` toggle, a device verification matrix doc, updates to `docs/bridge-contract.md`, `docs/api-reference.md`, `README.md`, `CHANGELOG.md`, `CLAUDE.md`. |
-| **Contract** | Four configurations: iOS old, iOS new, Android old, Android new. Golden-frame verification (`scripts/run-golden-*.sh`) run under the new architecture too — pixel output must be identical, since the render path is literally the same code. |
-| **Acceptance** | All four configurations run the example app; the frozen contract holds in all four; goldens match. |
-| **Agent** | RNEngineer |
-| **Risks** | Genuinely needs hardware, like Chunk 7.4. Cannot be closed headlessly. |
+
+|                  |                                                                                                                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Goal**         | Both architectures demonstrably work on device, and the docs say what is supported.                                                                                                                                                           |
+| **Depends on**   | 9.9                                                                                                                                                                                                                                           |
+| **Deliverables** | `example/` toggle, a device verification matrix doc, updates to `docs/bridge-contract.md`, `docs/api-reference.md`, `README.md`, `CHANGELOG.md`, `CLAUDE.md`.                                                                                 |
+| **Contract**     | Four configurations: iOS old, iOS new, Android old, Android new. Golden-frame verification (`scripts/run-golden-*.sh`) run under the new architecture too — pixel output must be identical, since the render path is literally the same code. |
+| **Acceptance**   | All four configurations run the example app; the frozen contract holds in all four; goldens match.                                                                                                                                            |
+| **Agent**        | RNEngineer                                                                                                                                                                                                                                    |
+| **Risks**        | Genuinely needs hardware, like Chunk 7.4. Cannot be closed headlessly.                                                                                                                                                                        |
 
 **Status: the example app is togglable and the verification matrix was run on a
 simulator/emulator.** As in Chunk 7.4, the "needs hardware" risk above turned
@@ -2071,12 +2243,12 @@ make the two deferred behavioural risks observable rather than assumed:
 
 ### Results
 
-| configuration | app runs | animations render | metadata | TurboModule | coalescing check | change-guard check |
-| --- | --- | --- | --- | --- | --- | --- |
-| Android, Legacy | pass | pass | pass | `isAvailable()` true | **143 loops / 143.0 expected over 59.6 s — exact** | 18 ticks → 0 reloads, 0 restarts |
-| Android, New Arch | pass | pass | pass | `isAvailable()` true (after the fixes below) | **118 loops / 118.8 over 49.5 s; 235 / 235.4 over 98 s — exact** | **26 ticks → 0 reloads, 0 restarts** |
-| iOS, Legacy | builds + links (`xcodebuild` BUILD SUCCEEDED) | not exercised at runtime | — | — | — | — |
-| iOS, New Arch | builds + links (`xcodebuild` BUILD SUCCEEDED, `RNRlottieComponentView.o` compiled under `-DRCT_NEW_ARCH_ENABLED=1`) | not exercised at runtime | — | — | — | — |
+| configuration     | app runs                                                                                                            | animations render        | metadata | TurboModule                                  | coalescing check                                                 | change-guard check                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------- | -------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------ |
+| Android, Legacy   | pass                                                                                                                | pass                     | pass     | `isAvailable()` true                         | **143 loops / 143.0 expected over 59.6 s — exact**               | 18 ticks → 0 reloads, 0 restarts     |
+| Android, New Arch | pass                                                                                                                | pass                     | pass     | `isAvailable()` true (after the fixes below) | **118 loops / 118.8 over 49.5 s; 235 / 235.4 over 98 s — exact** | **26 ticks → 0 reloads, 0 restarts** |
+| iOS, Legacy       | builds + links (`xcodebuild` BUILD SUCCEEDED)                                                                       | not exercised at runtime | —        | —                                            | —                                                                | —                                    |
+| iOS, New Arch     | builds + links (`xcodebuild` BUILD SUCCEEDED, `RNRlottieComponentView.o` compiled under `-DRCT_NEW_ARCH_ENABLED=1`) | not exercised at runtime | —        | —                                            | —                                                                | —                                    |
 
 Screenshots: `example/screenshots/android-legacy-verification.png`,
 `android-newarch.png`, `android-newarch-verification.png`.
@@ -2135,7 +2307,7 @@ independent causes, both worth recording:
 appeared to work while its `ComponentDescriptor` was never registered.** The
 views rendered, props applied, and events arrived — via RN's ViewManager interop
 fallback, not via our generated Fabric component. A green screenshot is
-therefore *not* sufficient evidence that the Fabric path is live; the generated
+therefore _not_ sufficient evidence that the Fabric path is live; the generated
 `autolinking.cpp` must be checked for the component's registration. This is
 exactly the silent mis-registration §1.3 pinned `componentDescriptors` to
 prevent — the pin was correct, but a cached autolinking artifact defeated it.
@@ -2176,7 +2348,7 @@ Each of these is a deliberate exclusion, not an oversight.
 - **Any change to `cpp/`.** If a chunk needs one, the design is wrong.
 - **Fixing the pre-existing `resizeMode` / `cacheStrategy` no-ops on Android.**
   Both remain accepted-and-validated-but-inert there (CLAUDE.md's known
-  follow-ups). This work must not make them *worse* — in particular the
+  follow-ups). This work must not make them _worse_ — in particular the
   validation must keep rejecting silently rather than crashing (§3.2.3) — but
   implementing them is a draw-path/cache-flag change, unrelated to architecture.
 - **`allowRemoteSources` and remote loading.** Still a JS-only gate; still
@@ -2184,7 +2356,7 @@ Each of these is a deliberate exclusion, not an oversight.
 - **Alpha in `colorOverrides`.** Still discarded, on both architectures, because
   the core's `setColor` has no alpha parameter.
 - **`onFrame`, or any per-frame bridge traffic.** Fabric's event pipeline is
-  faster than the bridge's, which makes this temptation *more* available, not
+  faster than the bridge's, which makes this temptation _more_ available, not
   less. `onMetrics` at <= 1/sec remains the only recurring event.
 - **Extracting `RNRlottiePlayerSurface`** (Option C in §3.6). The right
   long-term shape, deliberately deferred so this work does not edit the shipped
