@@ -21,9 +21,12 @@ imperative commands, marker playback, the dynamic-property overrides, and live
 
 Neither GitHub nor npm plays a relative `.mov` inline, so that link downloads
 the file. For a quick look without downloading, `example/screenshots/` has
-stills from both platforms (`android.png`, `ios.png`), and
+stills from both platforms and both architectures, and
 [`example/README.md`](example/README.md) documents everything the app
-exercises.
+exercises. The example app is also the dual-architecture verification harness —
+it detects and displays which architecture it is running under, and instruments
+the two behaviours most likely to regress under Fabric (see the verification
+matrix below).
 
 ## Architecture at a glance
 
@@ -91,6 +94,13 @@ the app** (`pod install` + a full Xcode/Gradle build) — a Metro/Fast Refresh
 reload is not enough, since the native module and view manager themselves have
 changed.
 
+On the New Architecture this matters more than usual: your app's autolinking
+output is what registers this library's Fabric component and TurboModule, and a
+stale copy of it produces an app that renders through RN's interop fallback
+while the real Fabric component is never registered. If the component seems to
+work but `Rlottie.isAvailable()` returns `false`, see
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
+
 ## Minimal usage
 
 ```tsx
@@ -140,17 +150,42 @@ not yet the default, so supporting it would mean shipping two registration
 mechanisms. On RN < 0.76 with `newArchEnabled=true` the component will fail to
 resolve rather than silently misbehave. The Legacy path still covers 0.68+.
 
-| RN version                    | Legacy Architecture                                    | New Architecture                                    |
-| ----------------------------- | ------------------------------------------------------ | --------------------------------------------------- |
-| 0.81.0                        | **Verified** — built and exercised in this repo.       | **Verified** — see the verification matrix below.    |
-| 0.76.0 – 0.80.x               | Expected to work, not independently verified.          | Expected to work, not independently verified.       |
-| 0.71.0 – 0.75.x               | Expected to work, not independently verified.          | **Not supported** (see the 0.76 floor above).       |
-| 0.68.0 – 0.70.x               | Expected to work, not verified. See the RN 0.71 note.  | **Not supported.**                                  |
-| >= 0.82.0                     | Not supported — `peerDependencies` ceiling, untested.  | Not supported.                                      |
+| RN version      | Legacy Architecture                                   | New Architecture                              |
+| --------------- | ----------------------------------------------------- | --------------------------------------------- |
+| 0.81.0          | **Verified** — see the verification matrix below.     | **Verified** — see the matrix below.          |
+| 0.76.0 – 0.80.x | Expected to work, not independently verified.         | Expected to work, not independently verified. |
+| 0.71.0 – 0.75.x | Expected to work, not independently verified.         | **Not supported** (see the 0.76 floor above). |
+| 0.68.0 – 0.70.x | Expected to work, not verified. See the RN 0.71 note. | **Not supported.**                            |
+| >= 0.82.0       | Not supported — `peerDependencies` ceiling, untested. | Not supported.                                |
 
 `peerDependencies.react-native` is `>=0.68.0 <0.82.0` — treat everything
 outside RN 0.81.0 itself as "should work per the code's stated assumptions,"
 not as covered by CI or device testing in this repo.
+
+### What "verified" actually means
+
+Honest scope, because "supports the New Architecture" is easy to overclaim:
+
+| configuration     | evidence                                                                                                   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| Android, Legacy   | **Runtime** — example app run on an API 37 emulator.                                                       |
+| Android, New Arch | **Runtime** — same, with the Fabric registration confirmed in the generated `autolinking.cpp`.             |
+| iOS, Legacy       | **Build only** — `pod install` + `xcodebuild` succeed; app not launched.                                   |
+| iOS, New Arch     | **Build only** — same, with the Fabric component view confirmed compiled under `-DRCT_NEW_ARCH_ENABLED=1`. |
+
+On Android under Fabric, both behaviours most at risk from the architecture
+switch were measured rather than assumed: an unrelated style-only re-render
+does **not** restart playback or re-resolve the source (26 re-renders → 0 of
+either), and no `onAnimationLoop` events are lost to event coalescing (loop
+counts match wall-clock expectation exactly over runs up to 98 s).
+
+The iOS rows are deliberately not upgraded. Both configurations compile and
+link, but the app was not launched on a Simulator, and — as the Android work
+proved — **a successful build is not evidence that the Fabric component is
+registered**: a stale autolinking cache produced an app that rendered
+correctly through RN's ViewManager interop fallback while our own
+`ComponentDescriptor` was never registered at all. See
+[`docs/troubleshooting.md`](docs/troubleshooting.md) if you suspect this.
 
 Notes worth knowing before you pick a version:
 
@@ -176,6 +211,9 @@ Notes worth knowing before you pick a version:
   views, rejected sources, build/link failures, and reading `onMetrics`.
 - [`docs/bridge-contract.md`](docs/bridge-contract.md) — the frozen prop/
   event/command contract iOS and Android must match byte-for-byte.
+- [`docs/new-architecture-design.md`](docs/new-architecture-design.md) — how
+  Fabric/TurboModule support is layered alongside the Legacy path without
+  touching the shared C++ core, and the verification behind each claim.
 - [`CHANGELOG.md`](CHANGELOG.md) — release notes.
 - [`docs/render-benchmark.md`](docs/render-benchmark.md) — the sync-vs-async
   render measurement behind the "no per-frame allocation" design (development-

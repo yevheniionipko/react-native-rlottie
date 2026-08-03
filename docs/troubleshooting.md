@@ -121,11 +121,46 @@ null`, or similar exclusion).
   at runtime with `ClassNotFoundException`, not at build time. If you're
   vendoring/forking this library's Android build script, verify the Kotlin
   plugin is still applied.
-- **`newArchEnabled=true` and the component silently doesn't render, or
-  autolinking behaves unexpectedly.** This library is **Legacy Architecture
-  only** — there's no Fabric component or Codegen spec. Set
-  `newArchEnabled=false` (iOS: `RCT_NEW_ARCH_ENABLED=0`; Android:
-  `newArchEnabled=false` in `gradle.properties`) for apps using this library.
+- **`newArchEnabled=true` and the component doesn't render, or the module is
+  "not available".** The New Architecture path requires **RN >= 0.76**; below
+  that the component will not resolve. On a supported version, see the next
+  section — the usual cause is a stale autolinking cache, not a missing
+  feature.
+
+## New Architecture: renders, but the Fabric component isn't actually registered
+
+Worth knowing because the failure is **invisible**: the app looks correct.
+
+If the app's generated autolinking output is stale — most often because it was
+produced before this library was added or upgraded — it can carry
+`"componentDescriptors": []`, and the generated `autolinking.cpp` will contain
+no reference to this library at all. The app still renders: RN falls back to
+the ViewManager **interop** layer, so props apply and events arrive, while our
+own `ComponentDescriptor` is never registered and the real Fabric component is
+never used. The most reliable symptom is unrelated: `Rlottie.isAvailable()`
+returns `false`, because the TurboModule provider is missing from the same
+generated file.
+
+To check on Android, look for the registration:
+
+```sh
+grep Rlottie android/app/build/generated/autolinking/src/main/jni/autolinking.cpp
+```
+
+Expect both `RNRlottieSpec_ModuleProvider` and
+`concreteComponentDescriptorProvider<RlottieViewComponentDescriptor>()`. If
+they are absent, delete the cached autolinking output and rebuild:
+
+```sh
+rm -rf android/build/generated/autolinking android/app/build/generated/autolinking
+```
+
+On iOS the equivalent artifact is the generated
+`RCTThirdPartyComponentsProvider.mm`, which must name `RNRlottieComponentView`;
+a `pod install` regenerates it.
+
+A successful build is therefore **not** evidence that the Fabric path is live —
+verify the registration, not the screenshot.
 
 ## Android: library loads, but crashes/fails on the very first native call
 
