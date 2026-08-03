@@ -152,15 +152,28 @@ resolve rather than silently misbehave. The Legacy path still covers 0.68+.
 
 | RN version      | Legacy Architecture                                   | New Architecture                              |
 | --------------- | ----------------------------------------------------- | --------------------------------------------- |
+| >= 0.82.0       | Removed by React Native itself.                       | Expected to work, not independently verified. |
 | 0.81.0          | **Verified** — see the verification matrix below.     | **Verified** — see the matrix below.          |
 | 0.76.0 – 0.80.x | Expected to work, not independently verified.         | Expected to work, not independently verified. |
 | 0.71.0 – 0.75.x | Expected to work, not independently verified.         | **Not supported** (see the 0.76 floor above). |
 | 0.68.0 – 0.70.x | Expected to work, not verified. See the RN 0.71 note. | **Not supported.**                            |
-| >= 0.82.0       | Not supported — `peerDependencies` ceiling, untested. | Not supported.                                |
 
-`peerDependencies.react-native` is `>=0.68.0 <0.82.0` — treat everything
-outside RN 0.81.0 itself as "should work per the code's stated assumptions,"
-not as covered by CI or device testing in this repo.
+`peerDependencies.react-native` is `>=0.68.0` — open-ended. It previously
+carried a `<0.82.0` ceiling, which existed only because this library was
+Legacy-only and RN 0.82 drops the Legacy Architecture. Now that a real Fabric
+component and TurboModule ship, that ceiling was blocking installs for no
+reason and has been removed. Treat everything outside RN 0.81.0 itself as
+"should work per the code's stated assumptions," not as covered by CI or
+device testing in this repo.
+
+On **RN >= 0.82 the New Architecture is the only option**, so this library's
+Fabric path is the one that runs there — nothing to configure. The JS layer is
+already safe on such a runtime: `UIManager` and `findNodeHandle` are
+dereferenced only inside the Legacy dispatch branch, which is never taken when
+Fabric is active. What has **not** been checked on 0.82+ is whether the Legacy
+_native_ adapter sources still compile against an RN that removed the old
+architecture; they are still shipped in the package and built unconditionally.
+If you hit that, please open an issue with the compiler output.
 
 ### What "verified" actually means
 

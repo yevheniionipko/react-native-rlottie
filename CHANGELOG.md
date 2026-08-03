@@ -31,6 +31,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   clean at `-Wall -Wextra -Werror`; no source changes were needed.
 - Android events now dispatch through `EventDispatcher` rather than
   `RCTEventEmitter` — one path for both architectures.
+- **`peerDependencies.react-native` is now `>=0.68.0`, open-ended** — the
+  `<0.82.0` ceiling has been removed. It existed only because the library was
+  Legacy-only and RN 0.82 drops the Legacy Architecture; with a real Fabric
+  component and TurboModule shipping, it was blocking installs on the very
+  versions this release targets. RN >= 0.82 runs the Fabric path. Not
+  independently verified on 0.82+.
 
 ### Fixed
 

@@ -34,11 +34,24 @@ Legacy adapters already call from. See "Threading, settled" below.
 
 ## Minimum React Native version for the new-architecture path
 
-**New-architecture support requires RN >= 0.76.** The Legacy path keeps its
-existing `>=0.68.0 <0.82.0` range; `package.json`'s `peerDependencies` does not
-change. The floor is documented, enforced by nothing, and stated in the README:
-a 0.74 app with `newArchEnabled=true` will fail to find the component rather
-than silently misbehave.
+**New-architecture support requires RN >= 0.76.** The floor is documented,
+enforced by nothing, and stated in the README: a 0.74 app with
+`newArchEnabled=true` will fail to find the component rather than silently
+misbehave.
+
+**Amended after the work landed: `peerDependencies.react-native` is now
+`>=0.68.0`, open-ended.** This document originally said the range would not
+change, keeping the `<0.82.0` ceiling. That ceiling existed only because the
+library was Legacy-only and RN 0.82 drops the Legacy Architecture — shipping a
+real Fabric component and TurboModule removes its reason to exist, and leaving
+it would have blocked installs on exactly the RN versions this work exists to
+support. The JS layer is safe on a New-Architecture-only runtime:
+`src/commands.ts` dereferences `UIManager`/`findNodeHandle` only inside the
+Legacy branch, which `isNewArchitectureEnabled()` skips, and
+`getViewManagerConfig` is called through optional chaining. Still unverified on
+0.82+: whether the Legacy *native* adapters (`ios/RNRlottieViewManager.mm`,
+the `SimpleViewManager` subclass) still compile against an RN that removed the
+old architecture, since both are shipped and built unconditionally.
 
 Why 0.76 and not lower:
 
