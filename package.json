@@ -1,7 +1,7 @@
 {
   "name": "@yevheniionipko/react-native-rlottie",
   "version": "0.2.1",
-  "description": "High-performance Lottie animations for React Native, rendered natively via the rlottie C++ engine (Legacy Architecture, RN <= 0.81).",
+  "description": "High-performance Lottie animations for React Native, rendered natively via the rlottie C++ engine. Supports both the New Architecture (Fabric + TurboModules) and the Legacy Architecture.",
   "repository": {
     "type": "git",
     "url": "https://github.com/yevheniionipko/react-native-rlottie.git"
@@ -66,7 +66,10 @@
     "animation",
     "ios",
     "android",
-    "native-component"
+    "native-component",
+    "fabric",
+    "turbomodule",
+    "new-architecture"
   ],
   "license": "MIT",
   "publishConfig": {
