@@ -1,5 +1,6 @@
 /**
- * react-native-rlottie example app (Chunk 8.1).
+ * react-native-rlottie example app (Chunk 8.1; Chunk 9.10 added the
+ * "New architecture verification" section below).
  *
  * One screen exercising the real public surface of the library rather than a
  * hello-world: two `RlottieView`s (a bundled asset:/// source and an inline
@@ -8,13 +9,15 @@
  * lifecycle event, and the global `Rlottie` module. See example/README.md for
  * how to run this on Android/iOS.
  *
- * Legacy Architecture only (newArchEnabled=false) — see android/gradle.properties
- * and ios/Podfile, and the root CLAUDE.md.
+ * Both the Legacy Architecture and Fabric/TurboModules are supported — toggle
+ * via android/gradle.properties' `newArchEnabled` and
+ * `RCT_NEW_ARCH_ENABLED=1 pod install` on iOS. See
+ * docs/new-architecture-design.md.
  *
  * @format
  */
 
-import React, {useCallback, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   Alert,
   Platform,
@@ -94,6 +97,14 @@ function Row({children}: {children: React.ReactNode}) {
   return <View style={styles.row}>{children}</View>;
 }
 
+// Detected at runtime, not hardcoded, so a screenshot is self-evidencing about
+// which architecture actually ran. Same signal src/commands.ts branches on.
+const IS_FABRIC =
+  (globalThis as {nativeFabricUIManager?: unknown}).nativeFabricUIManager != null;
+const ARCH_LABEL = IS_FABRIC
+  ? 'New Architecture (Fabric)'
+  : 'Legacy Architecture';
+
 export default function App() {
   const primaryRef = useRef<RlottieViewRef>(null);
 
@@ -134,6 +145,59 @@ export default function App() {
   const [nativeVersion, setNativeVersion] = useState<string>('(not queried)');
   const [cacheSizeInput, setCacheSizeInput] = useState('4');
 
+  // --- Chunk 9.10: Android event-coalescing check (ranked risk #3) ---------
+  // A short-duration (200 frames @ 60fps = 3.333s), high-speed, looping
+  // animation produces many onAnimationLoop events. canCoalesce()=false is
+  // supposed to guarantee every one of them arrives; silent loss is the
+  // failure mode (nothing else logs it), so this counts loops against a
+  // rough expectation computed from wall-clock elapsed time.
+  const LOOP_TEST_SPEED = 8;
+  const LOOP_TEST_DURATION_S = 200 / 60 / LOOP_TEST_SPEED;
+  const [loopCount, setLoopCount] = useState(0);
+  const [loopElapsedS, setLoopElapsedS] = useState(0);
+  const loopStartRef = useRef<number | null>(null);
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (loopStartRef.current != null) {
+        setLoopElapsedS((Date.now() - loopStartRef.current) / 1000);
+      }
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+  const loopExpected = loopElapsedS > 0 ? loopElapsedS / LOOP_TEST_DURATION_S : 0;
+
+  // --- Chunk 9.10: Fabric change-guard check (ranked risk #1) --------------
+  // Toggling `jitterOn` forces App to re-render every 500ms, which — under
+  // Fabric — hands the primary RlottieView a full, freshly-constructed props
+  // set on every commit (see docs/new-architecture-design.md §3.5), even
+  // though only `margin` below actually differs. Without the three
+  // change-guards (source cacheKey compare, configure() dirty-compare,
+  // progress compare) that would re-resolve the source / re-anchor playback /
+  // reseek on every tick, and the counts below would climb in lockstep with
+  // jitterTicks. With the guards, they should stay flat.
+  const [jitterOn, setJitterOn] = useState(false);
+  const [jitterTicks, setJitterTicks] = useState(0);
+  const [loadedTotal, setLoadedTotal] = useState(0);
+  const [startTotal, setStartTotal] = useState(0);
+  const [jitterBaseline, setJitterBaseline] = useState<{
+    loaded: number;
+    start: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!jitterOn) {
+      return;
+    }
+    setJitterBaseline({loaded: loadedTotal, start: startTotal});
+    setJitterTicks(0);
+    const id = setInterval(() => {
+      setJitterTicks(t => t + 1);
+    }, 500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jitterOn]);
+  const loadedSinceJitter = jitterBaseline ? loadedTotal - jitterBaseline.loaded : 0;
+  const startSinceJitter = jitterBaseline ? startTotal - jitterBaseline.start : 0;
+
   // Deliberately NOT SafeAreaView: RN 0.81 deprecates it (it warns at runtime)
   // and its replacement, react-native-safe-area-context, is a dependency this
   // example does not need. ScrollView's contentInsetAdjustmentBehavior handles
@@ -150,7 +214,7 @@ export default function App() {
           },
         ]}>
         <Text style={styles.title}>react-native-rlottie example</Text>
-        <Text style={styles.subtitle}>Legacy Architecture · RN 0.81.0</Text>
+        <Text style={styles.subtitle}>{ARCH_LABEL} · RN 0.81.0</Text>
 
         <Section title="Bundled asset:/// source (imperative controls target this one)">
           <View style={styles.playerBox}>
@@ -165,10 +229,15 @@ export default function App() {
               colorOverrides={colorOverrides}
               opacityOverrides={opacityOverrides}
               strokeWidthOverrides={strokeWidthOverrides}
-              style={styles.player}
+              // The `margin` jitter is deliberately unrelated to any
+              // playback-shaping prop — see the "Fabric change-guard check"
+              // section below. `styles.player` is a stable object; only this
+              // spread element changes.
+              style={[styles.player, {margin: jitterOn ? jitterTicks % 2 : 0}]}
               onAnimationLoaded={e => {
                 setLoadedInfo(e.nativeEvent);
                 setMarkers(e.nativeEvent.markers);
+                setLoadedTotal(c => c + 1);
                 appendLog(
                   `onAnimationLoaded ${e.nativeEvent.width}x${e.nativeEvent.height} ` +
                     `${e.nativeEvent.totalFrames}f @ ${e.nativeEvent.frameRate}fps`,
@@ -177,7 +246,10 @@ export default function App() {
               onAnimationError={(e: {nativeEvent: RlottieErrorEvent}) =>
                 appendLog(`onAnimationError ${e.nativeEvent.code}: ${e.nativeEvent.message}`)
               }
-              onAnimationStart={() => appendLog('onAnimationStart')}
+              onAnimationStart={() => {
+                setStartTotal(c => c + 1);
+                appendLog('onAnimationStart');
+              }}
               onAnimationPause={() => appendLog('onAnimationPause')}
               onAnimationLoop={() => appendLog('onAnimationLoop')}
               onAnimationFinish={() => appendLog('onAnimationFinish')}
@@ -346,6 +418,55 @@ export default function App() {
           )}
         </Section>
 
+        <Section title="Chunk 9.10: Android event-coalescing check (onAnimationLoop)">
+          <View style={styles.loopTestBox}>
+            <RlottieView
+              source={ASSET_SOURCE}
+              autoPlay
+              loop
+              speed={LOOP_TEST_SPEED}
+              style={styles.loopTestPlayer}
+              onAnimationLoaded={() => {
+                if (loopStartRef.current == null) {
+                  loopStartRef.current = Date.now();
+                }
+              }}
+              onAnimationLoop={() => setLoopCount(c => c + 1)}
+            />
+          </View>
+          <Text style={styles.mono}>
+            {`elapsed=${loopElapsedS.toFixed(1)}s  loopCount=${loopCount}  ` +
+              `expected~=${loopExpected.toFixed(1)} (loop period ~${LOOP_TEST_DURATION_S.toFixed(3)}s @ ${LOOP_TEST_SPEED}x)`}
+          </Text>
+          <Text style={styles.meta}>
+            If events silently coalesce, loopCount will trail noticeably behind
+            "expected" the longer this view runs. Nothing else logs a dropped
+            onAnimationLoop, so this counter is the only signal.
+          </Text>
+        </Section>
+
+        <Section title="Chunk 9.10: Fabric change-guard check (unrelated re-render)">
+          <Row>
+            <Text style={styles.label}>
+              force periodic re-render (unrelated `margin` jitter on the bundled-asset view above, every 500ms)
+            </Text>
+            <Switch value={jitterOn} onValueChange={setJitterOn} />
+          </Row>
+          <Text style={styles.mono}>
+            {`jitterTicks=${jitterTicks}  ` +
+              `onAnimationLoaded since jitter start=${loadedSinceJitter}  ` +
+              `onAnimationStart since jitter start=${startSinceJitter}`}
+          </Text>
+          <Text style={styles.meta}>
+            Expected: both counts stay at 0 no matter how high jitterTicks
+            climbs — a style-only prop change must not re-resolve the source
+            or restart playback. If either count tracks jitterTicks, one of
+            the three §3.5 change-guards (source cacheKey / configure()
+            dirty-compare / progress compare) is missing under this
+            architecture.
+          </Text>
+        </Section>
+
         <Section title="Global RlottieModule">
           <Row>
             <Btn
@@ -433,6 +554,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   player: {width: '100%', height: '100%'},
+  loopTestBox: {
+    width: 80,
+    height: 80,
+    backgroundColor: '#f2f2f2',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  loopTestPlayer: {width: '100%', height: '100%'},
   meta: {fontSize: 12, color: '#555', marginTop: 6},
   mono: {fontSize: 11, color: '#333', fontFamily: 'Courier'},
   row: {flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 8, gap: 8},

@@ -42,6 +42,26 @@ versions, and this library supports a range of them (plan §10) — so Android's
 Commands that arrive before the view has a live native handle are dropped
 silently, not queued and not an error.
 
+**The numeric ids in the table above are LEGACY-ONLY.** Under the New
+Architecture, commands are dispatched **by name only** — `codegenNativeCommands`
+forwards the command string to the renderer and no integer index is involved
+anywhere. The ids therefore keep every constraint they already had (never
+renumber, `__reservedCommandSlot0` stays at declaration index 0 on iOS,
+`playMarker` stays last), but none of that applies to the Fabric path, which
+must not grow a reserved slot or any declaration-order sensitivity.
+
+**One command has a different name on the two paths.** The Fabric command is
+`setPlaybackSpeed`; the Legacy command id 8 remains `setSpeed`. This is forced,
+not a preference: Android's codegen merges prop setters and command methods into
+a single generated interface, so the `speed` prop's `setSpeed(T, double)` and a
+`setSpeed` command's `setSpeed(T, double)` have identical erasure and the
+generated Java fails to compile. Because library codegen runs unconditionally,
+that would break every consumer's build on **both** architectures. The public
+JS API is unaffected — `ref.setSpeed(v)` is the only name a consumer ever uses,
+and `src/commands.ts` maps it to the right native command per architecture.
+Anyone adding a command must check its name against `set<PropName>` for all 16
+props before adding it.
+
 `play`'s frame range is a **one-off override for that play only** — it must not
 be written into the persistent playback config, or a later argument-less `play()`
 would inherit it. Both platforms pass the values straight to

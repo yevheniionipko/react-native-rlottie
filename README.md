@@ -31,16 +31,20 @@ exercises.
 TypeScript API (src/)         RlottieView + imperative ref. Never touches
                                UIManager or findNodeHandle directly.
         │
-Legacy-bridge adapters         iOS: RCTViewManager + Objective-C++ (ios/)
-(ios/, android/)                Android: SimpleViewManager + JNI (android/)
+Bridge adapters                Legacy: RCTViewManager (ios/) + SimpleViewManager
+(ios/, android/)                        + JNI (android/)
+                               Fabric: RCTViewComponentView (ios/fabric/) +
+                                        the same Android ViewManager, codegen'd
         │
 Shared C++ core (cpp/)        RlottiePlayerCore over vendored rlottie: parsing,
                                timing, rendering, buffers, caching, cleanup.
+                               Identical on both architectures — untouched by
+                               the Fabric work.
 ```
 
-**Target: React Native Legacy Architecture only** (`newArchEnabled=false`).
-Fabric/TurboModules are out of scope for v1 — see the compatibility matrix
-below before adding this to a New Architecture app.
+**Both architectures are supported from one package.** The correct component
+and module are selected automatically; see the compatibility matrix below for
+the RN >= 0.76 floor that applies to the New Architecture path.
 
 ## Installation
 
@@ -124,19 +128,25 @@ the imperative ref API.
 
 ## Supported React Native versions
 
-This library targets **Legacy Architecture only** (`newArchEnabled=false`).
-There is no Fabric component and no TurboModule spec in v1 — the layering is
-deliberately designed so a future Fabric adapter can reuse the shared C++ core,
-but that adapter does not exist yet. **If your app has
-`newArchEnabled=true`, this library will not work as a Fabric component; you
-must build with the Legacy Architecture.**
+This library supports **both architectures from one package**. The Legacy
+Architecture path (`newArchEnabled=false`) is unchanged and remains supported
+down to RN 0.68. A real Fabric component and a real TurboModule are also
+shipped, and are selected automatically when your app runs the New
+Architecture — there is nothing to configure and no separate entry point.
 
-| RN version                           | Status                                                                                               |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| 0.81.0                               | **Verified** — the only version actually built and exercised in this repo's own devDependency.       |
-| 0.71.0 – 0.80.x                      | Expected to work (Legacy Architecture), not independently verified.                                  |
-| 0.68.0 – 0.70.x                      | Expected to work, not independently verified. See the RN 0.71 note below.                            |
-| ≥ 0.82.0 or any New Architecture app | Not supported. `peerDependencies` currently allows `<0.82.0`; this is a ceiling, not a tested claim. |
+**New Architecture support requires RN >= 0.76.** Below that, iOS third-party
+component registration used a different generated provider and bridgeless was
+not yet the default, so supporting it would mean shipping two registration
+mechanisms. On RN < 0.76 with `newArchEnabled=true` the component will fail to
+resolve rather than silently misbehave. The Legacy path still covers 0.68+.
+
+| RN version                    | Legacy Architecture                                    | New Architecture                                    |
+| ----------------------------- | ------------------------------------------------------ | --------------------------------------------------- |
+| 0.81.0                        | **Verified** — built and exercised in this repo.       | **Verified** — see the verification matrix below.    |
+| 0.76.0 – 0.80.x               | Expected to work, not independently verified.          | Expected to work, not independently verified.       |
+| 0.71.0 – 0.75.x               | Expected to work, not independently verified.          | **Not supported** (see the 0.76 floor above).       |
+| 0.68.0 – 0.70.x               | Expected to work, not verified. See the RN 0.71 note.  | **Not supported.**                                  |
+| >= 0.82.0                     | Not supported — `peerDependencies` ceiling, untested.  | Not supported.                                      |
 
 `peerDependencies.react-native` is `>=0.68.0 <0.82.0` — treat everything
 outside RN 0.81.0 itself as "should work per the code's stated assumptions,"

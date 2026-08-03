@@ -5,6 +5,12 @@ path) and from `docs/bridge-contract.md`, which is the frozen authority for
 prop/event/command names and payload shapes. If something here and the
 contract doc ever disagree, the contract doc wins and this file has drifted.
 
+**This API is identical on both architectures.** The library ships a Legacy
+adapter and a Fabric component/TurboModule from one package and selects between
+them automatically; nothing below changes based on `newArchEnabled`, and there
+is no separate import path. New Architecture support requires RN >= 0.76 (see
+the README's compatibility matrix); the Legacy path still covers 0.68+.
+
 ```ts
 import {
   RlottieView,

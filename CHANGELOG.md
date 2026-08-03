@@ -3,6 +3,47 @@
 All notable changes to this project are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **New Architecture (Fabric + TurboModules) support, alongside the existing
+  Legacy Architecture.** One package serves both; the correct component and
+  module are selected automatically, with no configuration and no separate
+  import path. Requires **RN >= 0.76** for the New Architecture path; the
+  Legacy path still covers 0.68+.
+- Codegen specs (`src/specs/`), a Fabric component view on iOS
+  (`ios/fabric/RNRlottieComponentView.mm`, which composes the existing
+  `RNRlottieView` rather than reimplementing it), a Fabric-capable Android
+  `ViewManager`, and a real TurboModule on both platforms.
+
+### Changed
+
+- **`onMetrics` counters are now `double` on the wire, previously `int`.**
+  `framesRendered`, `framesDropped`, `bufferAllocCount`, `peakBufferBytes`,
+  and `uiStallCount` are affected. This closes a real divergence — Android
+  wrote them with a saturating 32-bit `putInt` while iOS boxed the native
+  `uint64_t` exactly. **No consumer change is required**: `RlottieMetricsEvent`
+  already typed every field as `number`, and a JS number is a double that is
+  exact to 2^53.
+- The shared C++ core now compiles as **C++20** on iOS (RN's own standard,
+  applied by `install_modules_dependencies`), on both architectures. Verified
+  clean at `-Wall -Wextra -Werror`; no source changes were needed.
+- Android events now dispatch through `EventDispatcher` rather than
+  `RCTEventEmitter` — one path for both architectures.
+
+### Fixed
+
+- `src/RlottieView.tsx` contained a raw NUL byte used as a string separator,
+  which made the file non-text: `grep` skipped it silently and `git` diffed it
+  as binary. Replaced with an escape producing a byte-identical string.
+- `Rlottie.isAvailable()` could report `false` (and the other module calls
+  throw) under the New Architecture even with the module correctly linked. The
+  native module was resolved once at import time and the result cached, so a
+  lookup that ran before the TurboModule was resolvable stayed null forever.
+  Resolution is now redone per call. Invisible on the Legacy path, where the
+  lookup falls through to `NativeModules`.
+
 ## [0.1.0] - 2026-08-02
 
 Initial v1 feature set — the Legacy-Architecture-only React Native component

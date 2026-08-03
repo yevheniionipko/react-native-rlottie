@@ -15,6 +15,8 @@
 // `android/.../RlottieModule.kt` takes a trailing `Promise`), so `await` behaves
 // identically. See docs/bridge-contract.md "Global module".
 
+import {NativeModules, TurboModuleRegistry} from 'react-native';
+
 import RlottieModuleSpec from './specs/NativeRlottieModule';
 import type {RlottieConfigureOptions, RlottieNativeVersion} from './types';
 
@@ -37,10 +39,32 @@ const LINKING_ERROR =
   'It is also expected to be missing under Jest or any renderer without the ' +
   'native runtime.';
 
-// `configure`'s spec argument is `UnsafeObject` (docs/new-architecture-design.md
-// §2.2), so the typed signature above is only enforced at this module's boundary,
-// same as it was against `NativeModules[MODULE_NAME]` before.
-const nativeModule = RlottieModuleSpec as RlottieNativeModule | null;
+/**
+ * Resolves the native module, or returns null.
+ *
+ * The lookup is redone on every call, never cached. The spec module's default
+ * export is `TurboModuleRegistry.get(...)` evaluated at ITS import time, which
+ * under the New Architecture can run before the TurboModule is resolvable — and
+ * a null captured then would be permanent. Falling through to a live
+ * `TurboModuleRegistry.get` and then `NativeModules` makes the first successful
+ * resolution win whenever it happens. See docs/new-architecture-design.md §2.5.
+ *
+ * `configure`'s spec argument is `UnsafeObject` (§2.2), so the typed signature
+ * above is only enforced at this module's boundary.
+ */
+function resolveNative(): RlottieNativeModule | null {
+  const fromSpec = RlottieModuleSpec as RlottieNativeModule | null;
+  if (fromSpec) {
+    return fromSpec;
+  }
+  const fromRegistry = TurboModuleRegistry.get<never>(
+    MODULE_NAME,
+  ) as RlottieNativeModule | null;
+  if (fromRegistry) {
+    return fromRegistry;
+  }
+  return (NativeModules[MODULE_NAME] as RlottieNativeModule) ?? null;
+}
 
 /**
  * Resolves the native module, or throws a diagnostic error.
@@ -52,6 +76,7 @@ const nativeModule = RlottieModuleSpec as RlottieNativeModule | null;
  * call site keeps the blast radius to the code that actually needs native.
  */
 function requireNative(): RlottieNativeModule {
+  const nativeModule = resolveNative();
   if (!nativeModule) {
     throw new Error(LINKING_ERROR);
   }
@@ -87,7 +112,7 @@ export function getNativeVersion(): Promise<RlottieNativeVersion> {
 
 /** True when the native module is linked. Lets callers degrade gracefully. */
 export function isAvailable(): boolean {
-  return nativeModule != null;
+  return resolveNative() != null;
 }
 
 export const Rlottie = {

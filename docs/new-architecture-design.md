@@ -2029,6 +2029,106 @@ recording because the failure mode is silent and misleading.
 | **Agent** | RNEngineer |
 | **Risks** | Genuinely needs hardware, like Chunk 7.4. Cannot be closed headlessly. |
 
+**Status: the example app is togglable and the verification matrix was run on a
+simulator/emulator.** As in Chunk 7.4, the "needs hardware" risk above turned
+out to be overstated: a booted Android emulator (API 37, arm64) and an iOS
+Simulator (iPhone 16 Pro) were both reachable, so all four configurations could
+actually be exercised rather than deferred.
+
+`example/ios/Podfile` now reads `RCT_NEW_ARCH_ENABLED` from the environment
+(`RCT_NEW_ARCH_ENABLED=1 pod install` → Fabric; plain `pod install` → Legacy)
+and `example/android/gradle.properties`'s `newArchEnabled` is a documented
+toggle, overridable with `-PnewArchEnabled=true`. Both files' comments
+previously asserted the library was Legacy-only; that is corrected. The app
+header self-reports which architecture it is running under, so a screenshot is
+self-evidencing.
+
+`example/App.tsx` gained two instrumented sections, which exist specifically to
+make the two deferred behavioural risks observable rather than assumed:
+
+- **Event-coalescing check (ranked risk #3).** A looping animation at 8× speed
+  (loop period ~0.417s) counts `onAnimationLoop` events against an expectation
+  derived from wall-clock elapsed time. Silent loss is the failure mode —
+  nothing else logs a dropped event — so a trailing counter is the only signal.
+- **Change-guard check (ranked risk #1).** A toggle jitters an unrelated
+  `margin` on the primary view every 500 ms, forcing a re-render, and counts
+  `onAnimationLoaded`/`onAnimationStart` since the toggle was flipped. Both must
+  stay at 0 however high the tick count climbs; either one tracking the ticks
+  means a §3.5 guard is missing.
+
+### Results
+
+| configuration | app runs | animations render | metadata | TurboModule | coalescing check | change-guard check |
+| --- | --- | --- | --- | --- | --- | --- |
+| Android, Legacy | pass | pass | pass | `isAvailable()` true | **143 loops / 143.0 expected over 59.6 s — exact** | 18 ticks → 0 reloads, 0 restarts |
+| Android, New Arch | pass | pass | pass | `isAvailable()` true (after the fixes below) | **118 loops / 118.8 over 49.5 s; 235 / 235.4 over 98 s — exact** | **26 ticks → 0 reloads, 0 restarts** |
+| iOS, Legacy | builds + links (`xcodebuild` BUILD SUCCEEDED) | not exercised at runtime | — | — | — | — |
+| iOS, New Arch | builds + links (`xcodebuild` BUILD SUCCEEDED, `RNRlottieComponentView.o` compiled under `-DRCT_NEW_ARCH_ENABLED=1`) | not exercised at runtime | — | — | — | — |
+
+Screenshots: `example/screenshots/android-legacy-verification.png`,
+`android-newarch.png`, `android-newarch-verification.png`.
+
+**The two iOS rows are honestly incomplete.** Both configurations compile and
+link — Chunk 9.6 ran `pod install` and a full `xcodebuild` in both modes, and
+Chunk 9.8 confirmed the Fabric component view's object file is produced — but
+the app was not launched on the Simulator and exercised, so no iOS row claims
+runtime behaviour. Given finding (b) below, an iOS compile is explicitly **not**
+evidence that the Fabric component is registered; the same
+`RCTThirdPartyComponentsProvider` check would need doing there.
+
+**Ranked risk #1 is closed on Android with evidence**: 26 unrelated style-only
+re-renders under a genuinely-registered Fabric component produced zero source
+re-resolutions and zero playback restarts. **Ranked risk #3 is closed on both
+Android architectures**: loop counts track the wall-clock expectation exactly
+across runs of 20 s to 98 s.
+
+Android/Legacy detail: both the bundled `asset:///` and inline-JSON views
+rendered; `onAnimationLoaded` reported `590x320 · 201 frames · 60fps · 3.33s`
+with all four markers; `Rlottie.isAvailable()` returned `true`. Note this run
+already exercises the **new** event path end-to-end — Chunk 9.4 unified
+dispatch onto `EventDispatcher`/`RlottieEvent` for both architectures, and
+`EventDispatcherImpl` coalesces regardless of architecture, so `canCoalesce() =
+false` is what 143/143.0 actually demonstrates.
+
+Android/New-Architecture detail: `"fabric":true` in the RN startup log and the
+runtime-detected header both confirm Fabric was active; both views rendered and
+`onAnimationLoaded` arrived over the Fabric event path. Coalescing held there
+too — 135/134.9 at 56 s, 235/235.4 at 98 s.
+
+**Two real defects were found by running it, neither visible to any compile-time
+check.**
+
+**(a) `Rlottie.isAvailable()` returned `false` and `getNativeVersion()` threw
+"The native module RlottieModule is not available" — under Fabric only.** Two
+independent causes, both worth recording:
+
+1. `src/RlottieModule.ts` captured the spec module's default export in a
+   module-scope `const`. That export is `TurboModuleRegistry.get(...)` evaluated
+   at the spec module's own import time, so a null resolved then was cached
+   permanently — even though `requireNative()` is called per call and its
+   comment claimed the lookup was "deliberately lazy (per call)". On the Legacy
+   path this is invisible, because `TurboModuleRegistry.get` falls through to
+   `NativeModules`, which is populated by then. `resolveNative()` now redoes the
+   lookup on every call, falling through spec → live `TurboModuleRegistry.get`
+   → `NativeModules`, so the first successful resolution wins whenever it
+   happens.
+2. That alone did **not** fix it, which is what exposed the real cause: the
+   app's **`autolinking.json` was stale**, generated before Chunk 9.1 added the
+   pinned `react-native.config.js`. It carried `"componentDescriptors": []` and
+   no `libraryName`, and the generated `autolinking.cpp` contained **no
+   reference to Rlottie at all**.
+
+**(b) The consequence of (2) is the more alarming finding: the Fabric component
+appeared to work while its `ComponentDescriptor` was never registered.** The
+views rendered, props applied, and events arrived — via RN's ViewManager interop
+fallback, not via our generated Fabric component. A green screenshot is
+therefore *not* sufficient evidence that the Fabric path is live; the generated
+`autolinking.cpp` must be checked for the component's registration. This is
+exactly the silent mis-registration §1.3 pinned `componentDescriptors` to
+prevent — the pin was correct, but a cached autolinking artifact defeated it.
+**Anyone re-verifying must delete `example/android/{,app/}build/generated/autolinking`
+first**, or they will re-measure the stale state.
+
 ---
 
 # 6. Explicitly out of scope for v1 of this work

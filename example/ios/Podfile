@@ -17,15 +17,20 @@ end
 target 'RlottieExample' do
   config = use_native_modules!
 
+  # react-native-rlottie ships both the Legacy Architecture and a Fabric/
+  # TurboModule path (see docs/new-architecture-design.md). This example is
+  # the dual-architecture verification harness, so it reads
+  # RCT_NEW_ARCH_ENABLED from the environment instead of hardcoding a mode:
+  #   RCT_NEW_ARCH_ENABLED=1 pod install   -> Fabric + TurboModules
+  #   pod install                          -> Legacy Architecture (default)
+  new_arch_enabled = ENV['RCT_NEW_ARCH_ENABLED'] == '1'
+
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/..",
-    # react-native-rlottie targets the Legacy Architecture only (RN <= 0.81,
-    # see the root CLAUDE.md) — force it off regardless of RCT_NEW_ARCH_ENABLED
-    # in the environment, so this example always exercises the shipped code.
-    :fabric_enabled => false,
-    :new_arch_enabled => false
+    :fabric_enabled => new_arch_enabled,
+    :new_arch_enabled => new_arch_enabled
   )
 
   post_install do |installer|
